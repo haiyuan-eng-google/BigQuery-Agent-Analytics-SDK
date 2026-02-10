@@ -303,11 +303,30 @@ Evaluation Report: token_efficiency_evaluator
 
 Evaluation Report: correctness_judge
   Dataset: test-project-0728-467323.agent_analytics.agent_events_v2 WHERE session_id IN UNNEST(@session_ids)
-  Sessions: 83
-  Passed: 0 (0%)
-  Failed: 83
+  Sessions: 3
+  Passed: 1 (33%)
+  Failed: 2
   Aggregate Scores:
-    correctness: 0.081
+    correctness: 0.533
+
+  e2e-509c2db954de: correctness=1.0 PASSED
+    The agent correctly identified the user's request for hotels, invoked
+    the appropriate tool (search_hotels), and presented a relevant and
+    well-formatted list of hotel options with the requested check-in and
+    check-out dates.
+
+  e2e-9410ef56b8c6: correctness=0.4 FAILED
+    The agent provided a plan addressing all aspects of the request, but it
+    contains several significant factual errors. The direct flight duration
+    from SFO to NYC (4 hours) is impossible for a cross-country flight. The
+    weather forecast for Monday shows a low temperature (18C) higher than
+    the high (15C).
+
+  e2e-e37b557718da: correctness=0.2 FAILED
+    The agent provided highly inaccurate information for flights and weather.
+    Southwest Airlines does not fly to Tokyo, and the flight price/duration
+    are unrealistic. The weather forecast for Tokyo in May (high 33C/91F,
+    low 5C/41F on the same day) is also factually incorrect.
 
 --- 2d. Trajectory Matching ---
 
