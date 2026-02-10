@@ -1,0 +1,809 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Evaluation engine for BigQuery Agent Analytics SDK.
+
+Provides ``CodeEvaluator`` for deterministic, code-based metrics and
+``LLMAsJudge`` for semantic evaluation using LLM-as-a-judge. The
+``evaluate()`` function orchestrates batch evaluation using BigQuery's
+native AI functions for scalable, zero-ETL assessment.
+
+Example usage::
+
+    from bigquery_agent_analytics.evaluators import (
+        CodeEvaluator, LLMAsJudge,
+    )
+
+    # Deterministic evaluation
+    evaluator = CodeEvaluator.latency(threshold_ms=5000)
+
+    # LLM-based semantic evaluation
+    judge = LLMAsJudge.correctness()
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+from dataclasses import field
+from datetime import datetime
+from datetime import timezone
+import json
+import logging
+from typing import Any
+from typing import Callable
+from typing import Optional
+
+from pydantic import BaseModel
+from pydantic import Field
+
+logger = logging.getLogger("bigquery_agent_analytics." + __name__)
+
+DEFAULT_ENDPOINT = "gemini-2.5-flash"
+
+
+# ------------------------------------------------------------------ #
+# Evaluation Report                                                    #
+# ------------------------------------------------------------------ #
+
+
+class SessionScore(BaseModel):
+  """Scores for a single evaluated session."""
+
+  session_id: str = Field(description="The session ID evaluated.")
+  scores: dict[str, float] = Field(
+      default_factory=dict,
+      description="Metric name to score (0.0 - 1.0).",
+  )
+  passed: bool = Field(
+      default=True,
+      description="Whether the session passed all thresholds.",
+  )
+  details: dict[str, Any] = Field(
+      default_factory=dict,
+      description="Additional per-session details.",
+  )
+  llm_feedback: Optional[str] = Field(
+      default=None,
+      description="LLM judge feedback if applicable.",
+  )
+
+
+class EvaluationReport(BaseModel):
+  """Aggregate report from an evaluation run."""
+
+  dataset: str = Field(description="Dataset or filter description.")
+  evaluator_name: str = Field(description="Name of evaluator used.")
+  total_sessions: int = Field(default=0)
+  passed_sessions: int = Field(default=0)
+  failed_sessions: int = Field(default=0)
+  aggregate_scores: dict[str, float] = Field(
+      default_factory=dict,
+      description="Average scores across all sessions.",
+  )
+  session_scores: list[SessionScore] = Field(
+      default_factory=list,
+  )
+  created_at: datetime = Field(
+      default_factory=lambda: datetime.now(timezone.utc),
+  )
+
+  @property
+  def pass_rate(self) -> float:
+    """Fraction of sessions that passed."""
+    if self.total_sessions == 0:
+      return 0.0
+    return self.passed_sessions / self.total_sessions
+
+  def summary(self) -> str:
+    """Returns a human-readable summary."""
+    lines = [
+        f"Evaluation Report: {self.evaluator_name}",
+        f"  Dataset: {self.dataset}",
+        f"  Sessions: {self.total_sessions}",
+        f"  Passed: {self.passed_sessions} ({self.pass_rate:.0%})",
+        f"  Failed: {self.failed_sessions}",
+    ]
+    if self.aggregate_scores:
+      lines.append("  Aggregate Scores:")
+      for name, score in sorted(self.aggregate_scores.items()):
+        lines.append(f"    {name}: {score:.3f}")
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------ #
+# Code-Based Evaluator                                                 #
+# ------------------------------------------------------------------ #
+
+
+@dataclass
+class _MetricDef:
+  """Internal definition of a code metric."""
+
+  name: str
+  fn: Callable[[dict[str, Any]], float]
+  threshold: float = 0.5
+
+
+class CodeEvaluator:
+  """Deterministic evaluator using code-based metric functions.
+
+  Metrics operate on a session summary dict containing::
+
+      {
+        "session_id": str,
+        "total_events": int,
+        "tool_calls": int,
+        "tool_errors": int,
+        "llm_calls": int,
+        "avg_latency_ms": float,
+        "max_latency_ms": float,
+        "total_latency_ms": float,
+        "turn_count": int,
+        "has_error": bool,
+      }
+
+  Each metric function returns a score between 0.0 and 1.0.
+  """
+
+  def __init__(
+      self,
+      name: str = "code_evaluator",
+      metrics: Optional[list[_MetricDef]] = None,
+  ) -> None:
+    self.name = name
+    self._metrics: list[_MetricDef] = metrics or []
+
+  def add_metric(
+      self,
+      name: str,
+      fn: Callable[[dict[str, Any]], float],
+      threshold: float = 0.5,
+  ) -> CodeEvaluator:
+    """Adds a custom metric function.
+
+    Args:
+        name: Metric name.
+        fn: Function taking session summary, returning 0-1 score.
+        threshold: Pass/fail threshold.
+
+    Returns:
+        Self for chaining.
+    """
+    self._metrics.append(
+        _MetricDef(
+            name=name,
+            fn=fn,
+            threshold=threshold,
+        )
+    )
+    return self
+
+  def evaluate_session(self, session_summary: dict[str, Any]) -> SessionScore:
+    """Evaluates a single session summary.
+
+    Args:
+        session_summary: Dict with session metrics.
+
+    Returns:
+        SessionScore with computed scores.
+    """
+    scores: dict[str, float] = {}
+    passed = True
+
+    for metric in self._metrics:
+      try:
+        score = metric.fn(session_summary)
+        score = max(0.0, min(1.0, float(score)))
+        scores[metric.name] = score
+        if score < metric.threshold:
+          passed = False
+      except Exception as e:
+        logger.warning("Metric %s failed: %s", metric.name, e)
+        scores[metric.name] = 0.0
+        passed = False
+
+    return SessionScore(
+        session_id=session_summary.get("session_id", "unknown"),
+        scores=scores,
+        passed=passed,
+    )
+
+  # ---- Pre-built evaluators ---- #
+
+  @staticmethod
+  def latency(
+      threshold_ms: float = 5000.0,
+  ) -> CodeEvaluator:
+    """Pre-built evaluator that checks average latency.
+
+    Args:
+        threshold_ms: Maximum acceptable average latency in ms.
+
+    Returns:
+        CodeEvaluator configured for latency checking.
+    """
+
+    def _score(s: dict[str, Any]) -> float:
+      avg = s.get("avg_latency_ms", 0)
+      if avg <= 0:
+        return 1.0
+      if avg >= threshold_ms:
+        return 0.0
+      return 1.0 - (avg / threshold_ms)
+
+    evaluator = CodeEvaluator(name="latency_evaluator")
+    evaluator.add_metric("latency", _score, threshold=0.5)
+    return evaluator
+
+  @staticmethod
+  def turn_count(max_turns: int = 10) -> CodeEvaluator:
+    """Pre-built evaluator that checks turn count.
+
+    Args:
+        max_turns: Maximum acceptable number of turns.
+
+    Returns:
+        CodeEvaluator configured for turn count checking.
+    """
+
+    def _score(s: dict[str, Any]) -> float:
+      turns = s.get("turn_count", 0)
+      if turns <= 0:
+        return 1.0
+      if turns >= max_turns:
+        return 0.0
+      return 1.0 - (turns / max_turns)
+
+    evaluator = CodeEvaluator(name="turn_count_evaluator")
+    evaluator.add_metric("turn_count", _score, threshold=0.5)
+    return evaluator
+
+  @staticmethod
+  def error_rate(
+      max_error_rate: float = 0.1,
+  ) -> CodeEvaluator:
+    """Pre-built evaluator that checks tool error rate.
+
+    Args:
+        max_error_rate: Maximum acceptable tool error fraction.
+
+    Returns:
+        CodeEvaluator configured for error rate checking.
+    """
+
+    def _score(s: dict[str, Any]) -> float:
+      calls = s.get("tool_calls", 0)
+      errors = s.get("tool_errors", 0)
+      if calls <= 0:
+        return 1.0
+      rate = errors / calls
+      if rate >= max_error_rate:
+        return 0.0
+      return 1.0 - (rate / max_error_rate)
+
+    evaluator = CodeEvaluator(name="error_rate_evaluator")
+    evaluator.add_metric("error_rate", _score, threshold=0.5)
+    return evaluator
+
+  @staticmethod
+  def token_efficiency(
+      max_tokens: int = 50000,
+  ) -> CodeEvaluator:
+    """Pre-built evaluator that checks total token usage.
+
+    Args:
+        max_tokens: Maximum acceptable total token count.
+
+    Returns:
+        CodeEvaluator configured for token efficiency.
+    """
+
+    def _score(s: dict[str, Any]) -> float:
+      total = s.get("total_tokens", 0)
+      if total <= 0:
+        return 1.0
+      if total >= max_tokens:
+        return 0.0
+      return 1.0 - (total / max_tokens)
+
+    evaluator = CodeEvaluator(name="token_efficiency_evaluator")
+    evaluator.add_metric("token_efficiency", _score, threshold=0.5)
+    return evaluator
+
+  @staticmethod
+  def cost_per_session(
+      max_cost_usd: float = 1.0,
+      input_cost_per_1k: float = 0.00025,
+      output_cost_per_1k: float = 0.00125,
+  ) -> CodeEvaluator:
+    """Pre-built evaluator that checks estimated cost.
+
+    Args:
+        max_cost_usd: Maximum acceptable cost in USD.
+        input_cost_per_1k: Cost per 1K input tokens.
+        output_cost_per_1k: Cost per 1K output tokens.
+
+    Returns:
+        CodeEvaluator configured for cost checking.
+    """
+
+    def _score(s: dict[str, Any]) -> float:
+      input_t = s.get("input_tokens", 0)
+      output_t = s.get("output_tokens", 0)
+      cost = (input_t / 1000) * input_cost_per_1k + (
+          output_t / 1000
+      ) * output_cost_per_1k
+      if cost <= 0:
+        return 1.0
+      if cost >= max_cost_usd:
+        return 0.0
+      return 1.0 - (cost / max_cost_usd)
+
+    evaluator = CodeEvaluator(name="cost_evaluator")
+    evaluator.add_metric("cost", _score, threshold=0.5)
+    return evaluator
+
+
+# ------------------------------------------------------------------ #
+# LLM-as-Judge Evaluator                                               #
+# ------------------------------------------------------------------ #
+
+
+_CORRECTNESS_PROMPT = """\
+You are evaluating an AI agent's response for correctness.
+
+## Conversation Trace
+{trace_text}
+
+## Final Agent Response
+{final_response}
+
+## Instructions
+Score the response on a scale of 1 to 10 for correctness: Did the \
+agent provide an accurate, factual response that addresses the \
+user's request?
+
+Respond with ONLY a valid JSON object:
+{{"correctness": <score>, "justification": "<brief reason>"}}
+"""
+
+_HALLUCINATION_PROMPT = """\
+You are evaluating an AI agent's response for hallucination.
+
+## Conversation Trace
+{trace_text}
+
+## Final Agent Response
+{final_response}
+
+## Instructions
+Score the response on a scale of 1 to 10 for faithfulness (where \
+10 means NO hallucination). Does the response contain claims not \
+supported by the tool results or conversation context?
+
+Respond with ONLY a valid JSON object:
+{{"faithfulness": <score>, "justification": "<brief reason>"}}
+"""
+
+_SENTIMENT_PROMPT = """\
+You are evaluating the sentiment of an AI agent's conversation.
+
+## Conversation Trace
+{trace_text}
+
+## Final Agent Response
+{final_response}
+
+## Instructions
+Score the overall sentiment and helpfulness of the interaction \
+on a scale of 1 to 10 (10 = very positive and helpful).
+
+Respond with ONLY a valid JSON object:
+{{"sentiment": <score>, "justification": "<brief reason>"}}
+"""
+
+
+@dataclass
+class _JudgeCriterion:
+  """A single LLM-as-judge criterion."""
+
+  name: str
+  prompt_template: str
+  score_key: str
+  threshold: float = 0.5
+
+
+class LLMAsJudge:
+  """Semantic evaluator using LLM-as-a-judge.
+
+  Uses BigQuery's native ``ML.GENERATE_TEXT`` (or the Gemini API)
+  to evaluate agent traces against semantic criteria like
+  correctness, hallucination, and sentiment.
+  """
+
+  def __init__(
+      self,
+      name: str = "llm_judge",
+      criteria: Optional[list[_JudgeCriterion]] = None,
+      model: Optional[str] = None,
+  ) -> None:
+    self.name = name
+    self._criteria: list[_JudgeCriterion] = criteria or []
+    self.model = model or "gemini-2.5-flash"
+
+  def add_criterion(
+      self,
+      name: str,
+      prompt_template: str,
+      score_key: str,
+      threshold: float = 0.5,
+  ) -> LLMAsJudge:
+    """Adds a custom evaluation criterion.
+
+    Args:
+        name: Criterion name.
+        prompt_template: Prompt with {trace_text} and
+            {final_response} placeholders.
+        score_key: JSON key in LLM response containing score.
+        threshold: Pass/fail threshold (0-1 scale).
+
+    Returns:
+        Self for chaining.
+    """
+    self._criteria.append(
+        _JudgeCriterion(
+            name=name,
+            prompt_template=prompt_template,
+            score_key=score_key,
+            threshold=threshold,
+        )
+    )
+    return self
+
+  async def evaluate_session(
+      self,
+      trace_text: str,
+      final_response: str,
+  ) -> SessionScore:
+    """Evaluates a session using the LLM judge.
+
+    Args:
+        trace_text: Formatted trace text.
+        final_response: Final agent response.
+
+    Returns:
+        SessionScore with LLM-judged scores.
+    """
+    scores: dict[str, float] = {}
+    feedback_parts: list[str] = []
+    passed = True
+
+    for criterion in self._criteria:
+      score, feedback = await self._judge_criterion(
+          criterion,
+          trace_text,
+          final_response,
+      )
+      scores[criterion.name] = score
+      if feedback:
+        feedback_parts.append(f"{criterion.name}: {feedback}")
+      if score < criterion.threshold:
+        passed = False
+
+    return SessionScore(
+        session_id="",
+        scores=scores,
+        passed=passed,
+        llm_feedback="\n".join(feedback_parts) or None,
+    )
+
+  async def _judge_criterion(
+      self,
+      criterion: _JudgeCriterion,
+      trace_text: str,
+      final_response: str,
+  ) -> tuple[float, str]:
+    """Evaluates one criterion via LLM call."""
+    prompt = criterion.prompt_template.format(
+        trace_text=trace_text,
+        final_response=final_response or "No response.",
+    )
+
+    try:
+      from google.genai import types
+
+      from google import genai
+
+      client = genai.Client()
+      response = await client.aio.models.generate_content(
+          model=self.model,
+          contents=prompt,
+          config=types.GenerateContentConfig(
+              temperature=0.1,
+              max_output_tokens=512,
+          ),
+      )
+
+      text = response.text.strip()
+      result = _parse_json_from_text(text)
+
+      if result and criterion.score_key in result:
+        raw = float(result[criterion.score_key])
+        score = raw / 10.0  # Normalize 1-10 to 0-1
+        justification = result.get("justification", "")
+        return score, justification
+
+      return 0.0, text
+
+    except ImportError:
+      logger.warning("google-genai not installed, skipping LLM judge.")
+      return 0.0, "google-genai not installed"
+    except Exception as e:
+      logger.warning("LLM judge failed: %s", e)
+      return 0.0, str(e)
+
+  # ---- Pre-built evaluators ---- #
+
+  @staticmethod
+  def correctness(
+      threshold: float = 0.5,
+      model: Optional[str] = None,
+  ) -> LLMAsJudge:
+    """Pre-built correctness evaluator.
+
+    Args:
+        threshold: Minimum score to pass (0-1).
+        model: LLM model to use for judging.
+
+    Returns:
+        LLMAsJudge configured for correctness.
+    """
+    judge = LLMAsJudge(
+        name="correctness_judge",
+        model=model,
+    )
+    judge.add_criterion(
+        name="correctness",
+        prompt_template=_CORRECTNESS_PROMPT,
+        score_key="correctness",
+        threshold=threshold,
+    )
+    return judge
+
+  @staticmethod
+  def hallucination(
+      threshold: float = 0.5,
+      model: Optional[str] = None,
+  ) -> LLMAsJudge:
+    """Pre-built hallucination (faithfulness) evaluator.
+
+    Args:
+        threshold: Minimum faithfulness score to pass (0-1).
+        model: LLM model to use for judging.
+
+    Returns:
+        LLMAsJudge configured for hallucination detection.
+    """
+    judge = LLMAsJudge(
+        name="hallucination_judge",
+        model=model,
+    )
+    judge.add_criterion(
+        name="faithfulness",
+        prompt_template=_HALLUCINATION_PROMPT,
+        score_key="faithfulness",
+        threshold=threshold,
+    )
+    return judge
+
+  @staticmethod
+  def sentiment(
+      threshold: float = 0.5,
+      model: Optional[str] = None,
+  ) -> LLMAsJudge:
+    """Pre-built sentiment evaluator.
+
+    Args:
+        threshold: Minimum sentiment score to pass (0-1).
+        model: LLM model to use for judging.
+
+    Returns:
+        LLMAsJudge configured for sentiment analysis.
+    """
+    judge = LLMAsJudge(
+        name="sentiment_judge",
+        model=model,
+    )
+    judge.add_criterion(
+        name="sentiment",
+        prompt_template=_SENTIMENT_PROMPT,
+        score_key="sentiment",
+        threshold=threshold,
+    )
+    return judge
+
+
+# ------------------------------------------------------------------ #
+# SQL Templates for BigQuery-native evaluation                         #
+# ------------------------------------------------------------------ #
+
+SESSION_SUMMARY_QUERY = """\
+SELECT
+  session_id,
+  COUNT(*) AS total_events,
+  COUNTIF(event_type = 'TOOL_STARTING') AS tool_calls,
+  COUNTIF(event_type = 'TOOL_ERROR') AS tool_errors,
+  COUNTIF(event_type = 'LLM_REQUEST') AS llm_calls,
+  AVG(
+    CAST(
+      JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS FLOAT64
+    )
+  ) AS avg_latency_ms,
+  MAX(
+    CAST(
+      JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS FLOAT64
+    )
+  ) AS max_latency_ms,
+  TIMESTAMP_DIFF(
+    MAX(timestamp), MIN(timestamp), MILLISECOND
+  ) AS total_latency_ms,
+  COUNTIF(
+    event_type = 'USER_MESSAGE_RECEIVED'
+  ) AS turn_count,
+  COUNTIF(status = 'ERROR') > 0 AS has_error,
+  SUM(CAST(JSON_EXTRACT_SCALAR(
+    attributes, '$.input_tokens') AS INT64)) AS input_tokens,
+  SUM(CAST(JSON_EXTRACT_SCALAR(
+    attributes, '$.output_tokens') AS INT64)) AS output_tokens,
+  SUM(CAST(JSON_EXTRACT_SCALAR(
+    attributes, '$.input_tokens') AS INT64)) +
+  SUM(CAST(JSON_EXTRACT_SCALAR(
+    attributes, '$.output_tokens') AS INT64)) AS total_tokens
+FROM `{project}.{dataset}.{table}`
+WHERE {where}
+GROUP BY session_id
+LIMIT @trace_limit
+"""
+
+AI_GENERATE_JUDGE_BATCH_QUERY = """\
+WITH session_traces AS (
+  SELECT
+    session_id,
+    STRING_AGG(
+      CONCAT(
+        event_type, ': ',
+        COALESCE(
+          JSON_EXTRACT_SCALAR(content, '$.text_summary'), ''
+        )
+      ),
+      '\\n' ORDER BY timestamp
+    ) AS trace_text,
+    ARRAY_AGG(
+      JSON_EXTRACT_SCALAR(content, '$.response')
+      IGNORE NULLS
+      ORDER BY timestamp DESC
+      LIMIT 1
+    )[SAFE_OFFSET(0)] AS final_response
+  FROM `{project}.{dataset}.{table}`
+  WHERE {where}
+  GROUP BY session_id
+  HAVING LENGTH(trace_text) > 10
+  LIMIT @trace_limit
+)
+SELECT
+  session_id,
+  trace_text,
+  final_response,
+  result.*
+FROM session_traces,
+AI.GENERATE(
+  prompt => CONCAT(
+    @judge_prompt, '\\nTrace:\\n', trace_text,
+    '\\nResponse:\\n', COALESCE(final_response, 'N/A')
+  ),
+  endpoint => '{endpoint}',
+  model_params => JSON '{{"temperature": 0.1, "max_output_tokens": 500}}',
+  output_schema => 'score INT64, justification STRING'
+) AS result
+"""
+
+# Legacy template kept for backward compatibility with pre-created
+# BQ ML models.
+_LEGACY_LLM_JUDGE_BATCH_QUERY = """\
+WITH session_traces AS (
+  SELECT
+    session_id,
+    STRING_AGG(
+      CONCAT(
+        event_type, ': ',
+        COALESCE(
+          JSON_EXTRACT_SCALAR(content, '$.text_summary'), ''
+        )
+      ),
+      '\\n' ORDER BY timestamp
+    ) AS trace_text,
+    ARRAY_AGG(
+      JSON_EXTRACT_SCALAR(content, '$.response')
+      IGNORE NULLS
+      ORDER BY timestamp DESC
+      LIMIT 1
+    )[SAFE_OFFSET(0)] AS final_response
+  FROM `{project}.{dataset}.{table}`
+  WHERE {where}
+  GROUP BY session_id
+  HAVING LENGTH(trace_text) > 10
+  LIMIT @trace_limit
+)
+SELECT
+  session_id,
+  trace_text,
+  final_response,
+  ML.GENERATE_TEXT(
+    MODEL `{model}`,
+    STRUCT(
+      CONCAT(@judge_prompt, '\\nTrace:\\n', trace_text,
+             '\\nResponse:\\n', COALESCE(final_response, 'N/A'))
+      AS prompt
+    ),
+    STRUCT(0.1 AS temperature, 500 AS max_output_tokens)
+  ).ml_generate_text_result AS evaluation
+FROM session_traces
+"""
+
+# Keep backward-compatible alias.
+LLM_JUDGE_BATCH_QUERY = _LEGACY_LLM_JUDGE_BATCH_QUERY
+
+
+# ------------------------------------------------------------------ #
+# Helpers                                                              #
+# ------------------------------------------------------------------ #
+
+
+def _parse_json_from_text(text: str) -> Optional[dict[str, Any]]:
+  """Extracts and parses JSON from LLM response text."""
+  if not text:
+    return None
+
+  # Try markdown code block
+  if "```json" in text:
+    parts = text.split("```json")
+    if len(parts) > 1:
+      json_part = parts[1]
+      if "```" in json_part:
+        json_part = json_part.split("```")[0]
+      try:
+        return json.loads(json_part.strip())
+      except json.JSONDecodeError:
+        pass
+
+  # Try raw JSON extraction
+  if "{" in text:
+    try:
+      start = text.index("{")
+      brace = 0
+      end = start
+      for i, ch in enumerate(text[start:], start):
+        if ch == "{":
+          brace += 1
+        elif ch == "}":
+          brace -= 1
+          if brace == 0:
+            end = i + 1
+            break
+      return json.loads(text[start:end])
+    except (ValueError, json.JSONDecodeError):
+      pass
+
+  return None
