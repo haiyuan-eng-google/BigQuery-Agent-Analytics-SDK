@@ -1,0 +1,444 @@
+================================================================
+  End-to-End Demo: Agent -> BigQuery -> SDK Evaluation
+================================================================
+  Project  : test-project-0728-467323
+  Dataset  : agent_analytics
+  Table    : agent_events_v2
+  Model    : gemini-3-flash-preview
+  Location : US
+
+################################################################
+#  PHASE 1: Run Agent & Log Traces to BigQuery
+################################################################
+
+================================================================
+  Session: e2e-9410ef56b8c6  (Simple trip)
+================================================================
+
+[Turn 1] User: Plan a weekend trip from San Francisco to New York departing 2025-04-12 and returning 2025-04-14. Search flights for April 12 and hotels checking in April 12, checking out April 14.
+------------------------------------------------
+  -> Tool call: search_flights
+  -> Tool call: search_flights
+  -> Tool call: search_hotels
+  -> Tool call: get_weather_forecast
+  -> Tool call: get_weather_forecast
+  -> Tool call: get_weather_forecast
+  -> Tool call: calculate_trip_budget
+
+[Agent]: Here is a plan for your weekend trip from San Francisco to New York from April 12 to April 14, 2025.
+
+### **Flights**
+*   **Departure (SFO -> NYC) - April 12:**
+    *   **Cheapest:** American Airlines at $255.50 (16:15 - 01:45+1, 2 stops).
+    *   **Direct:** American Airlines (Business) at $1,188.33 (19:00 - 23:45, 4h duration).
+*   **Return (NYC -> SFO) - April 14:**
+    *   **Cheapest:** Alaska Airlines at $258.90 (12:30 - 20:15, 2 stops).
+    *   **Direct/Fastest:** Alaska Airlines (Business) at $659.19 (20:45 - 02:00+1, 6h duration).
+
+### **Accommodation (April 12 - 14)**
+*   **New York Plaza:** $319.86/night (Budget-friendly, includes pool and airport shuttle).
+*   **Grand New York Hotel:** $355.17/night (Good location, 3.1km from center).
+*   **The New York Marriott:** $461.26/night (Highly rated: 4.8/5, full amenities).
+
+### **Weather Forecast**
+*   **Saturday, April 12:** Light Rain. High 23C (73F), Low 18C (64F).
+*   **Sunday, April 13:** Sunny. High 30C (86F), Low 10C (50F).
+*   **Monday, April 14:** Sunny. High 15C (59F), Low 18C (64F).
+
+### **Estimated Budget (3 Days)**
+Using the most affordable flight and hotel options:
+*   **Flights (Round-trip):** $514.40
+*   **Hotels (2 nights):** $639.72
+*   **Daily Expenses ($100/day):** $300.00
+*   **Taxes & Fees:** $174.49
+*   **Total Estimated Budget:** **$1,628.61 USD**
+
+Would you like me to look into specific activities or book any of these options for you?
+
+================================================================
+  Session: e2e-e37b557718da  (Complex trip)
+================================================================
+
+[Turn 1] User: I want to plan a 5-day vacation to Tokyo from 2025-05-01 to 2025-05-06. Search flights from Los Angeles departing 2025-05-01, find hotels in Tokyo checking in 2025-05-01 and checking out 2025-05-06, check the weather for 2025-05-02, and calculate the budget with the flight and hotel prices you find plus $150/day expenses for 5 days.
+------------------------------------------------
+  -> Tool call: search_flights
+  -> Tool call: search_hotels
+  -> Tool call: get_weather_forecast
+  -> Tool call: calculate_trip_budget
+
+[Agent]: Your 5-day trip to Tokyo from May 1 to May 6, 2025, is coming together! Here are the details based on your request:
+
+### Flights (Departure: 2025-05-01)
+The best option found is a non-stop flight with **Southwest Airlines** for **$208.27**.
+*   **Departure:** 19:15 from Los Angeles (LAX)
+*   **Arrival:** 06:15 (+1) in Tokyo
+*   **Duration:** 11 hours
+
+### Hotel (2025-05-01 to 2025-05-06)
+The **Tokyo Plaza** offers a great balance of price and location.
+*   **Price:** $236.05 per night (Total for 5 nights: **$1,180.25**)
+*   **Rating:** 3.7/5
+*   **Amenities:** Parking, Business Center, Airport Shuttle, Pool
+
+### Weather Forecast (2025-05-02)
+*   **Condition:** Partly Cloudy
+*   **Temperature:** High 33C (91F) / Low 5C (41F)
+*   **Note:** It will be quite warm during the day but much cooler at night, so consider packing layers.
+
+### Estimated Budget
+Using the lowest flight and hotel prices found, plus your $150/day allowance:
+
+| Item | Cost (USD) |
+| :--- | :--- |
+| Flight (Southwest) | $208.27 |
+| Hotel (5 nights) | $1,180.25 |
+| Daily Expenses ($150 x 5 days) | $750.00 |
+| Taxes & Fees (Estimated) | $256.62 |
+| **Total Estimated Budget** | **$2,395.14** |
+
+Enjoy your trip to Tokyo! Would you like me to look for different flight times or more hotel options?
+
+================================================================
+  Session: e2e-509c2db954de  (Multi-turn)
+================================================================
+
+[Turn 1] User: What's the weather like in Paris on 2025-04-20?
+------------------------------------------------
+  -> Tool call: get_weather_forecast
+
+[Agent]: The weather in Paris on April 20, 2025, is expected to be rainy.
+
+*   **Temperature:** High of 22C, Low of 10C
+*   **Conditions:** Rain
+*   **Precipitation Chance:** 47%
+*   **Humidity:** 74%
+*   **Wind Speed:** 30 km/h
+
+[Turn 2] User: Find me flights from Chicago to Paris on 2025-04-20.
+------------------------------------------------
+  -> Tool call: search_flights
+
+[Agent]: Here are some flight options from Chicago to Paris on April 20, 2025:
+
+| Airline | Class | Departure | Arrival | Stops | Price (USD) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Delta Air Lines** | Business | 09:30 | 14:45 | 2 | $373.09 |
+| **American Airlines** | Business | 17:00 | 00:00 (+1) | 2 | $521.34 |
+| **JetBlue Airways** | Premium Economy | 07:00 | 15:15 | 0 | $555.91 |
+| **United Airlines** | Economy | 15:30 | 17:15 | 2 | $806.59 |
+| **Southwest Airlines** | Business | 15:45 | 01:00 (+1) | 1 | $1,010.90 |
+
+[Turn 3] User: Now find hotels in Paris checking in 2025-04-20 and checking out 2025-04-25.
+------------------------------------------------
+  -> Tool call: search_hotels
+
+[Agent]: Here are some hotel options in Paris for your stay from April 20 to April 25, 2025:
+
+| Hotel | Rating | Price per Night (USD) | Key Amenities | Distance to Center |
+| :--- | :--- | :--- | :--- | :--- |
+| **The Paris Marriott** | 4.6 | $96.15 | Pool, Bar, Restaurant, Parking | 0.9 km |
+| **Paris Plaza** | 4.9 | $120.46 | Spa, Gym, WiFi | 5.4 km |
+| **Grand Paris Hotel** | 4.6 | $150.87 | Pool, Gym, Room Service, Shuttle | 4.2 km |
+| **Hilton Paris Downtown** | 4.1 | $218.70 | Spa, Gym, Pool, Bar, Parking | 2.2 km |
+| **Hyatt Regency Paris** | 5.0 | $499.14 | Gym, Business Center, Parking | 6.5 km |
+
+
+Flushing traces to BigQuery ...
+Waiting 15s for BigQuery data to settle ...
+
+
+################################################################
+#  PHASE 2: Evaluate with BigQuery Agent Analytics SDK
+################################################################
+
+--- 2a. Trace Retrieval & Visualisation ---
+
+Trace: e-288f20d8-1327-41bf-9b15-a763f629013e | Session: e2e-9410ef56b8c6 | 37718ms
+===================================================================================
+|-- [OK] USER_MESSAGE_RECEIVED [travel_planner] - Plan a weekend trip from San Francisco to New York departing 2025-04-12 and returning 2025-04-14. Search flights for ...
+|-- [OK] INVOCATION_STARTING [travel_planner]
+|-- [OK] AGENT_STARTING [travel_planner]
+|-- [OK] AGENT_COMPLETED [travel_planner] (37717ms)
+   |-- [OK] LLM_REQUEST [travel_planner] (gemini-3-flash-preview) - Plan a weekend trip from San Francisco to New York departing 2025-04-12 and returning 2025-04-14. Search flights for ...
+   |-- [OK] LLM_RESPONSE [travel_planner] (12668ms) - call: search_flights | call: search_flights | call: search_hotels | call: get_weather_forecast | call: get_weather_fo...
+   |-- [OK] TOOL_STARTING [travel_planner] (search_flights)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (search_flights) (0ms)
+   |-- [OK] TOOL_STARTING [travel_planner] (search_flights)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (search_flights) (0ms)
+   |-- [OK] TOOL_STARTING [travel_planner] (search_hotels)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (search_hotels) (0ms)
+   |-- [OK] TOOL_STARTING [travel_planner] (get_weather_forecast)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (get_weather_forecast) (0ms)
+   |-- [OK] TOOL_STARTING [travel_planner] (get_weather_forecast)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (get_weather_forecast) (0ms)
+   |-- [OK] TOOL_STARTING [travel_planner] (get_weather_forecast)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (get_weather_forecast) (0ms)
+   |-- [OK] LLM_REQUEST [travel_planner] (gemini-3-flash-preview) - Plan a weekend trip from San Francisco to New York departing 2025-04-12 and returning 2025-04-14. Search flights for ...
+   |-- [OK] LLM_RESPONSE [travel_planner] (19809ms) - call: calculate_trip_budget
+   |-- [OK] TOOL_STARTING [travel_planner] (calculate_trip_budget)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (calculate_trip_budget) (0ms)
+   |-- [OK] LLM_REQUEST [travel_planner] (gemini-3-flash-preview) - Plan a weekend trip from San Francisco to New York departing 2025-04-12 and returning 2025-04-14. Search flights for ...
+   +-- [OK] LLM_RESPONSE [travel_planner] (5223ms) - text: 'Here is a plan for your weekend trip from San Francisco to New York from April 12 to April 14, 2025. ...'
+|-- [OK] INVOCATION_COMPLETED [travel_planner]
+  Tool calls: 7
+    - search_flights
+    - search_flights
+    - search_hotels
+    - get_weather_forecast
+    - get_weather_forecast
+    - get_weather_forecast
+    - calculate_trip_budget
+  Final response preview:
+
+Trace: e-b395f950-fb39-45f0-82f8-d84cf7133e9b | Session: e2e-e37b557718da | 52175ms
+===================================================================================
+|-- [OK] USER_MESSAGE_RECEIVED [travel_planner] - I want to plan a 5-day vacation to Tokyo from 2025-05-01 to 2025-05-06. Search flights from Los Angeles departing 202...
+|-- [OK] INVOCATION_STARTING [travel_planner]
+|-- [OK] AGENT_STARTING [travel_planner]
+|-- [OK] AGENT_COMPLETED [travel_planner] (52174ms)
+   |-- [OK] LLM_REQUEST [travel_planner] (gemini-3-flash-preview) - I want to plan a 5-day vacation to Tokyo from 2025-05-01 to 2025-05-06. Search flights from Los Angeles departing 202...
+   |-- [OK] LLM_RESPONSE [travel_planner] (3935ms) - call: search_flights | call: search_hotels | call: get_weather_forecast
+   |-- [OK] TOOL_STARTING [travel_planner] (search_flights)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (search_flights) (0ms)
+   |-- [OK] TOOL_STARTING [travel_planner] (search_hotels)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (search_hotels) (0ms)
+   |-- [OK] TOOL_STARTING [travel_planner] (get_weather_forecast)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (get_weather_forecast) (0ms)
+   |-- [OK] LLM_REQUEST [travel_planner] (gemini-3-flash-preview) - I want to plan a 5-day vacation to Tokyo from 2025-05-01 to 2025-05-06. Search flights from Los Angeles departing 202...
+   |-- [OK] LLM_RESPONSE [travel_planner] (42390ms) - call: calculate_trip_budget
+   |-- [OK] TOOL_STARTING [travel_planner] (calculate_trip_budget)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (calculate_trip_budget) (0ms)
+   |-- [OK] LLM_REQUEST [travel_planner] (gemini-3-flash-preview) - I want to plan a 5-day vacation to Tokyo from 2025-05-01 to 2025-05-06. Search flights from Los Angeles departing 202...
+   +-- [OK] LLM_RESPONSE [travel_planner] (5834ms) - text: 'Your 5-day trip to Tokyo from May 1 to May 6, 2025, is coming together! ...'
+|-- [OK] INVOCATION_COMPLETED [travel_planner]
+  Tool calls: 4
+    - search_flights
+    - search_hotels
+    - get_weather_forecast
+    - calculate_trip_budget
+  Final response preview:
+
+Trace: e-b2bc2758-4ff2-453e-8457-bbdacfa9fdf7 | Session: e2e-509c2db954de | 98106ms
+===================================================================================
+|-- [OK] USER_MESSAGE_RECEIVED [travel_planner] - What's the weather like in Paris on 2025-04-20?
+|-- [OK] INVOCATION_STARTING [travel_planner]
+|-- [OK] AGENT_STARTING [travel_planner]
+|-- [OK] AGENT_COMPLETED [travel_planner] (58173ms)
+   |-- [OK] LLM_REQUEST [travel_planner] (gemini-3-flash-preview) - What's the weather like in Paris on 2025-04-20?
+   |-- [OK] LLM_RESPONSE [travel_planner] (55863ms) - call: get_weather_forecast
+   |-- [OK] TOOL_STARTING [travel_planner] (get_weather_forecast)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (get_weather_forecast) (0ms)
+   |-- [OK] LLM_REQUEST [travel_planner] (gemini-3-flash-preview) - What's the weather like in Paris on 2025-04-20?
+   +-- [OK] LLM_RESPONSE [travel_planner] (2300ms) - text: 'The weather in Paris on April 20, 2025, is expected to be rainy. ...'
+|-- [OK] INVOCATION_COMPLETED [travel_planner]
+|-- [OK] USER_MESSAGE_RECEIVED [travel_planner] - Find me flights from Chicago to Paris on 2025-04-20.
+|-- [OK] INVOCATION_STARTING [travel_planner]
+|-- [OK] AGENT_STARTING [travel_planner]
+|-- [OK] AGENT_COMPLETED [travel_planner] (5218ms)
+   |-- [OK] LLM_REQUEST [travel_planner] (gemini-3-flash-preview)
+   |-- [OK] LLM_RESPONSE [travel_planner] (2447ms) - call: search_flights
+   |-- [OK] TOOL_STARTING [travel_planner] (search_flights)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (search_flights) (0ms)
+   |-- [OK] LLM_REQUEST [travel_planner] (gemini-3-flash-preview)
+   +-- [OK] LLM_RESPONSE [travel_planner] (2751ms) - text: 'Here are some flight options from Chicago to Paris on April 20, 2025: ...'
+|-- [OK] INVOCATION_COMPLETED [travel_planner]
+|-- [OK] USER_MESSAGE_RECEIVED [travel_planner] - Now find hotels in Paris checking in 2025-04-20 and checking out 2025-04-25.
+|-- [OK] INVOCATION_STARTING [travel_planner]
+|-- [OK] AGENT_STARTING [travel_planner]
+|-- [OK] AGENT_COMPLETED [travel_planner] (33750ms)
+   |-- [OK] LLM_REQUEST [travel_planner] (gemini-3-flash-preview)
+   |-- [OK] LLM_RESPONSE [travel_planner] (29319ms) - call: search_hotels
+   |-- [OK] TOOL_STARTING [travel_planner] (search_hotels)
+   |-- [OK] TOOL_COMPLETED [travel_planner] (search_hotels) (1ms)
+   |-- [OK] LLM_REQUEST [travel_planner] (gemini-3-flash-preview)
+   +-- [OK] LLM_RESPONSE [travel_planner] (4396ms) - text: 'Here are some hotel options in Paris for your stay from April 20 to April 25, 2025: ...'
+|-- [OK] INVOCATION_COMPLETED [travel_planner]
+  Tool calls: 3
+    - get_weather_forecast
+    - search_flights
+    - search_hotels
+  Final response preview:
+
+
+--- 2b. Code-Based Evaluation ---
+
+[latency]
+Evaluation Report: latency_evaluator
+  Dataset: test-project-0728-467323.agent_analytics.agent_events_v2 WHERE session_id IN UNNEST(@session_ids)
+  Sessions: 3
+  Passed: 2 (67%)
+  Failed: 1
+  Aggregate Scores:
+    latency: 0.599
+
+[turn_count]
+Evaluation Report: turn_count_evaluator
+  Dataset: test-project-0728-467323.agent_analytics.agent_events_v2 WHERE session_id IN UNNEST(@session_ids)
+  Sessions: 3
+  Passed: 3 (100%)
+  Failed: 0
+  Aggregate Scores:
+    turn_count: 0.833
+
+[error_rate]
+Evaluation Report: error_rate_evaluator
+  Dataset: test-project-0728-467323.agent_analytics.agent_events_v2 WHERE session_id IN UNNEST(@session_ids)
+  Sessions: 3
+  Passed: 3 (100%)
+  Failed: 0
+  Aggregate Scores:
+    error_rate: 1.000
+
+[token_efficiency]
+Evaluation Report: token_efficiency_evaluator
+  Dataset: test-project-0728-467323.agent_analytics.agent_events_v2 WHERE session_id IN UNNEST(@session_ids)
+  Sessions: 3
+  Passed: 0 (0%)
+  Failed: 3
+  Aggregate Scores:
+    token_efficiency: 0.000
+
+
+--- 2c. LLM-as-Judge Evaluation ---
+
+Evaluation Report: correctness_judge
+  Dataset: test-project-0728-467323.agent_analytics.agent_events_v2 WHERE session_id IN UNNEST(@session_ids)
+  Sessions: 83
+  Passed: 0 (0%)
+  Failed: 83
+  Aggregate Scores:
+    correctness: 0.081
+
+--- 2d. Trajectory Matching ---
+
+  Session:  e2e-e37b557718da
+  Status:   EvalStatus.PASSED
+  Scores:   {'trajectory_in_order': 1.0, 'step_efficiency': 1.0}
+  Details:  {
+  "actual_tool_calls": 4,
+  "expected_tool_calls": 4
+}
+
+
+################################################################
+#  PHASE 3: Generate Insights Report
+################################################################
+
+--- Insights Summary ---
+
+Agent Insights Report
+  Generated: 2026-02-10 22:57 UTC
+  Sessions analyzed: 3
+  Success rate: 100%
+  Avg effectiveness: 10.0/10
+  Avg latency: 12028ms
+  Avg turns: 1.7
+  Error rate: 0.0%
+
+  Top Goals:
+    data_retrieval: 3
+    planning: 2
+    analysis: 1
+  Outcomes:
+    success: 3
+
+  Analysis Sections:
+    - Task Areas
+    - Interaction Patterns
+    - What Works Well
+    - Friction Analysis
+    - Tool Usage Patterns
+    - Improvement Suggestions
+    - Trends & Anomalies
+
+--- Executive Summary ---
+
+This agent demonstrates exceptional reliability and effectiveness, achieving a 100% success
+rate and perfect effectiveness in its current role as a dedicated travel planner, assisting
+with flight, hotel, and comprehensive trip organization. Users engage in short, task-oriented
+sessions, consistently leveraging travel-related tools for information retrieval and planning.
+However, a critical friction point is the extremely high average latency of over 12 seconds
+per turn, which significantly degrades user experience. This delay likely contributes to short
+session lengths and risks user abandonment.
+
+## Task Areas
+Based on the aggregated data from 3 agent conversation sessions, users are primarily engaging
+the agent for travel-related planning and information retrieval:
+
+*   **Travel Logistics & Search:** The most dominant task is searching for and booking travel
+    components, specifically flights and hotels, appearing in 2 out of 3 sessions.
+*   **Comprehensive Trip Planning:** Users are seeking assistance with broader trip planning,
+    including destination-specific itineraries (e.g., Tokyo vacation planning).
+*   **Financial Planning for Travel:** Budget-related tasks, such as estimation and
+    calculation, are a recurring need, likely tied to travel planning.
+*   **Specific Information Retrieval:** Users also leverage the agent for quick data lookups,
+    such as weather forecasts.
+
+## Interaction Patterns
+*   **Short, Task-Oriented Sessions:** Users engage in very brief interactions, averaging only
+    1.7 turns per session. The majority of sessions (2 out of 3) are classified as
+    'task_execution', indicating users are primarily seeking quick, direct answers.
+*   **Dedicated Travel Planning Focus:** The agent is exclusively used for travel planning,
+    with the `travel_planner` agent being invoked in all sessions. Users consistently leverage
+    tools such as `get_weather_forecast`, `search_flights`, and `search_hotels`.
+*   **High Latency Impacting Experience:** Average latency of over 12 seconds per turn. This
+    significant delay likely degrades user experience and could be a major factor contributing
+    to the short session lengths and low turn count.
+*   **Single-Agent Orchestration:** All observed interactions are handled by a single,
+    specialized agent (`travel_planner`). There is no evidence of multi-agent collaboration.
+
+## What Works Well
+*   **Exceptional Reliability and Effectiveness:** The agent consistently achieves a 100%
+    success rate and perfect 10/10 effectiveness.
+*   **High User Satisfaction:** It consistently delivers outcomes that meet or exceed user
+    expectations, resulting in high satisfaction levels (100% satisfied or very satisfied).
+*   **Strong Core Competencies:** The agent demonstrates particular strength in data
+    retrieval, planning, and analysis.
+
+## Friction Analysis
+*   **Primary Friction Point: Excessive Latency** - The average latency of 12,028ms (over 12
+    seconds) is extremely high for an interactive agent. This significant delay will lead to
+    user frustration and potentially users abandoning the interaction.
+*   **Systemic Friction: Inadequate Friction Logging** - The friction distribution being empty
+    indicates the system is not currently capturing specific user friction points. This is a
+    critical blind spot.
+*   **Hidden Friction: Risk of Unrecorded User Abandonment** - High latency significantly
+    increases the likelihood that users abandon the interaction before completion, meaning the
+    'success' rate might be artificially high.
+
+## Tool Usage Patterns
+*   **High Reliability & Consistent Core Usage:** 0.0% error rate. Core travel planning tools
+    (`get_weather_forecast`, `search_flights`, `search_hotels`) are consistently utilized.
+*   **Identifiable Workflow:** Frequent use of search tools followed by `calculate_trip_budget`
+    suggests a well-defined and repeatable travel planning workflow.
+*   **Optimization Opportunity: Workflow Streamlining:** Create composite tools or pre-chain
+    frequently used actions (e.g., automatically get weather when searching flights).
+*   **Optimization Opportunity: Capability Expansion:** Consider introducing new tools (e.g.,
+    `book_flight`, `book_hotel`, `find_local_attractions`) to broaden utility.
+
+## Improvement Suggestions
+1.  **Expand Proactive Assistance & Value Generation** - Implement a feature to anticipate
+    user needs or suggest logical next steps based on the successful completion of a task.
+2.  **Conduct a Deep Efficiency & Cost Optimization Audit** - Since effectiveness is 100%,
+    investigate the resources consumed to achieve this. Audit computational costs, API call
+    volume, and latency bottlenecks.
+
+## Trends & Anomalies
+*   **Extremely Limited Data:** Only 3 sessions on a single day; all observations are
+    preliminary.
+*   **Exceptional Initial Performance:** Perfect 100% success rate and 0.0% error rate.
+    Needs validation with larger volume.
+*   **Strong Focus on Travel Planning & Data Retrieval:** Primary use case is travel planning,
+    with "data retrieval" being the most frequent goal (3/3 sessions).
+*   **Emerging Specific Destination Interest:** "Tokyo vacation planning" as a top topic could
+    indicate early user interest in this destination.
+
+
+================================================================
+  Demo Complete!
+================================================================
+  Sessions created: 3
+    - e2e-9410ef56b8c6
+    - e2e-e37b557718da
+    - e2e-509c2db954de
+  Traces logged to: test-project-0728-467323.agent_analytics.agent_events_v2
