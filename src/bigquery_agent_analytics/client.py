@@ -437,6 +437,7 @@ class Client:
           table,
           where,
           params,
+          filt,
       )
     else:
       raise TypeError(f"Unsupported evaluator type: {type(evaluator)}")
@@ -488,6 +489,7 @@ class Client:
       table: str,
       where: str,
       params: list,
+      trace_filter: Optional[TraceFilter] = None,
   ) -> EvaluationReport:
     """Runs LLM-as-judge evaluation.
 
@@ -535,7 +537,7 @@ class Client:
         )
 
     # Fallback: fetch traces, evaluate via API
-    return self._api_judge(evaluator, table, where, params)
+    return self._api_judge(evaluator, table, where, params, trace_filter)
 
   def _ai_generate_judge(
       self,
@@ -670,9 +672,10 @@ class Client:
       table,
       where,
       params,
+      trace_filter: Optional[TraceFilter] = None,
   ) -> EvaluationReport:
     """Evaluates using the Gemini API (fallback)."""
-    traces = self.list_traces(TraceFilter(limit=100))
+    traces = self.list_traces(trace_filter or TraceFilter(limit=100))
 
     loop = asyncio.new_event_loop()
     try:
