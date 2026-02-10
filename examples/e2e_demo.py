@@ -325,6 +325,9 @@ def build_agent() -> LlmAgent:
           get_weather_forecast,
           calculate_trip_budget,
       ],
+      generate_content_config=types.GenerateContentConfig(
+          temperature=1.0,
+      ),
   )
 
 

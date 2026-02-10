@@ -490,15 +490,21 @@ class Trace:
       if span.event_type == "AGENT_COMPLETED":
         c = span.content
         if isinstance(c, dict):
-          return c.get("response") or c.get("text_summary")
-        return str(c) if c else None
+          result = c.get("response") or c.get("text_summary")
+          if result:
+            return result
+        elif c:
+          return str(c)
 
     for span in reversed(self.spans):
       if span.event_type == "LLM_RESPONSE":
         c = span.content
         if isinstance(c, dict):
-          return c.get("response")
-        return str(c) if c else None
+          result = c.get("response")
+          if result:
+            return result
+        elif c:
+          return str(c)
     return None
 
   @property
