@@ -663,14 +663,36 @@ SELECT
     event_type = 'USER_MESSAGE_RECEIVED'
   ) AS turn_count,
   COUNTIF(status = 'ERROR') > 0 AS has_error,
-  SUM(CAST(JSON_EXTRACT_SCALAR(
-    attributes, '$.input_tokens') AS INT64)) AS input_tokens,
-  SUM(CAST(JSON_EXTRACT_SCALAR(
-    attributes, '$.output_tokens') AS INT64)) AS output_tokens,
-  SUM(CAST(JSON_EXTRACT_SCALAR(
-    attributes, '$.input_tokens') AS INT64)) +
-  SUM(CAST(JSON_EXTRACT_SCALAR(
-    attributes, '$.output_tokens') AS INT64)) AS total_tokens
+  SUM(COALESCE(
+    CAST(JSON_EXTRACT_SCALAR(
+      attributes, '$.usage_metadata.prompt_token_count'
+    ) AS INT64),
+    CAST(JSON_EXTRACT_SCALAR(
+      attributes, '$.input_tokens'
+    ) AS INT64)
+  )) AS input_tokens,
+  SUM(COALESCE(
+    CAST(JSON_EXTRACT_SCALAR(
+      attributes, '$.usage_metadata.candidates_token_count'
+    ) AS INT64),
+    CAST(JSON_EXTRACT_SCALAR(
+      attributes, '$.output_tokens'
+    ) AS INT64)
+  )) AS output_tokens,
+  SUM(COALESCE(
+    CAST(JSON_EXTRACT_SCALAR(
+      attributes, '$.usage_metadata.total_token_count'
+    ) AS INT64),
+    COALESCE(
+      CAST(JSON_EXTRACT_SCALAR(
+        attributes, '$.input_tokens'
+      ) AS INT64), 0
+    ) + COALESCE(
+      CAST(JSON_EXTRACT_SCALAR(
+        attributes, '$.output_tokens'
+      ) AS INT64), 0
+    )
+  )) AS total_tokens
 FROM `{project}.{dataset}.{table}`
 WHERE {where}
 GROUP BY session_id
