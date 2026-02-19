@@ -62,11 +62,14 @@ try:
   from .trace import Trace
   from .trace import TraceFilter
 
+  from .views import ViewManager
+
   __all__.extend([
       "Client",
       "Trace",
       "Span",
       "TraceFilter",
+      "ViewManager",
       "CodeEvaluator",
       "LLMAsJudge",
       "EvaluationReport",

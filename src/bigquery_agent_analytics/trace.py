@@ -55,6 +55,19 @@ class EventType(Enum):
   TOOL_STARTING = "TOOL_STARTING"
   TOOL_COMPLETED = "TOOL_COMPLETED"
   TOOL_ERROR = "TOOL_ERROR"
+  STATE_DELTA = "STATE_DELTA"
+  HITL_CONFIRMATION_REQUEST = "HITL_CONFIRMATION_REQUEST"
+  HITL_CREDENTIAL_REQUEST = "HITL_CREDENTIAL_REQUEST"
+  HITL_INPUT_REQUEST = "HITL_INPUT_REQUEST"
+  HITL_CONFIRMATION_REQUEST_COMPLETED = (
+      "HITL_CONFIRMATION_REQUEST_COMPLETED"
+  )
+  HITL_CREDENTIAL_REQUEST_COMPLETED = (
+      "HITL_CREDENTIAL_REQUEST_COMPLETED"
+  )
+  HITL_INPUT_REQUEST_COMPLETED = (
+      "HITL_INPUT_REQUEST_COMPLETED"
+  )
 
 
 @dataclass
@@ -150,6 +163,35 @@ class Span:
         invocation_id=row.get("invocation_id"),
         user_id=row.get("user_id"),
     )
+
+  @property
+  def is_error(self) -> bool:
+    """Returns True if this span has ERROR status."""
+    return self.status == "ERROR"
+
+  @property
+  def subtree_has_error(self) -> bool:
+    """Returns True if this span or any descendant has an error."""
+    if self.is_error:
+      return True
+    return any(c.subtree_has_error for c in self.children)
+
+  @property
+  def failure_context(self) -> Optional[str]:
+    """Returns a concise failure description if this span errored.
+
+    Combines the event_type, tool name (if applicable), and the
+    error_message into a single string for quick debugging.
+    """
+    if not self.is_error:
+      return None
+    parts = [self.event_type]
+    tool = self.content.get("tool")
+    if tool:
+      parts.append(f"tool={tool}")
+    if self.error_message:
+      parts.append(self.error_message[:200])
+    return " | ".join(parts)
 
   @property
   def label(self) -> str:
@@ -417,7 +459,15 @@ class Trace:
   ) -> None:
     """Recursively renders a span and its children as a tree."""
     connector = "\u2514\u2500 " if is_last else "\u251c\u2500 "
-    status_icon = "\u2717" if span.status == "ERROR" else "\u2713"
+
+    if span.is_error:
+      status_icon = "\u2717"
+    elif span.subtree_has_error:
+      # Propagate error visibility: mark parents whose subtree
+      # contains an error so the failure is visible at every level.
+      status_icon = "\u26a0"
+    else:
+      status_icon = "\u2713"
 
     latency_str = ""
     if span.latency_ms is not None:
@@ -511,3 +561,33 @@ class Trace:
   def error_spans(self) -> list[Span]:
     """Returns all spans with ERROR status."""
     return [s for s in self.spans if s.status == "ERROR"]
+
+  def errors(self) -> list[dict[str, Any]]:
+    """Returns error spans with full failure context.
+
+    Each entry contains the span's event_type, agent, tool name,
+    error_message, latency, and span_id for easy debugging.
+
+    Returns:
+        List of dicts describing each error.
+    """
+    results = []
+    for span in self.spans:
+      if span.is_error:
+        entry: dict[str, Any] = {
+            "event_type": span.event_type,
+            "agent": span.agent,
+            "span_id": span.span_id,
+            "error_message": span.error_message,
+            "failure_context": span.failure_context,
+            "latency_ms": span.latency_ms,
+            "timestamp": span.timestamp,
+        }
+        tool = span.content.get("tool")
+        if tool:
+          entry["tool"] = tool
+        origin = span.content.get("tool_origin")
+        if origin:
+          entry["tool_origin"] = origin
+        results.append(entry)
+    return results
