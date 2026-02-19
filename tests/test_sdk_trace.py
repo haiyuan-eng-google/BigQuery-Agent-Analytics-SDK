@@ -355,3 +355,147 @@ class TestTraceFilter:
     assert "agent = @agent_id" in where
     assert "status = 'ERROR'" in where
     assert "user_id = @user_id" in where
+
+
+class TestSpanErrorVisibility:
+  """Tests for error propagation on Span."""
+
+  def _make_span(self, status="OK", error_message=None, **kwargs):
+    return Span(
+        event_type=kwargs.get("event_type", "TOOL_COMPLETED"),
+        agent="agent",
+        timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        content=kwargs.get("content", {}),
+        status=status,
+        error_message=error_message,
+        children=[],
+    )
+
+  def test_is_error_true(self):
+    s = self._make_span(status="ERROR", error_message="boom")
+    assert s.is_error is True
+
+  def test_is_error_false(self):
+    s = self._make_span(status="OK")
+    assert s.is_error is False
+
+  def test_subtree_has_error_direct(self):
+    s = self._make_span(status="ERROR")
+    assert s.subtree_has_error is True
+
+  def test_subtree_has_error_child(self):
+    child = self._make_span(status="ERROR", error_message="fail")
+    parent = self._make_span(status="OK")
+    parent.children = [child]
+    assert parent.subtree_has_error is True
+
+  def test_subtree_no_error(self):
+    child = self._make_span(status="OK")
+    parent = self._make_span(status="OK")
+    parent.children = [child]
+    assert parent.subtree_has_error is False
+
+  def test_failure_context_with_tool(self):
+    s = self._make_span(
+        status="ERROR",
+        error_message="timeout after 30s",
+        event_type="TOOL_ERROR",
+        content={"tool": "search_api"},
+    )
+    ctx = s.failure_context
+    assert "TOOL_ERROR" in ctx
+    assert "search_api" in ctx
+    assert "timeout" in ctx
+
+  def test_failure_context_none_when_ok(self):
+    s = self._make_span(status="OK")
+    assert s.failure_context is None
+
+
+class TestTraceErrors:
+  """Tests for Trace.errors() and error rendering."""
+
+  def _make_trace(self, spans):
+    return Trace(
+        trace_id="trace-1",
+        session_id="sess-1",
+        spans=spans,
+    )
+
+  def _make_span(self, span_id, parent=None, status="OK",
+                 error_message=None, event_type="AGENT_COMPLETED",
+                 content=None):
+    return Span(
+        event_type=event_type,
+        agent="agent",
+        timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        span_id=span_id,
+        parent_span_id=parent,
+        status=status,
+        error_message=error_message,
+        content=content or {},
+    )
+
+  def test_errors_returns_error_spans(self):
+    spans = [
+        self._make_span("s1", status="OK"),
+        self._make_span(
+            "s2", status="ERROR", error_message="fail",
+            event_type="TOOL_ERROR",
+            content={"tool": "my_tool"},
+        ),
+    ]
+    trace = self._make_trace(spans)
+    errors = trace.errors()
+    assert len(errors) == 1
+    assert errors[0]["error_message"] == "fail"
+    assert errors[0]["tool"] == "my_tool"
+    assert errors[0]["event_type"] == "TOOL_ERROR"
+
+  def test_errors_empty_when_no_errors(self):
+    spans = [self._make_span("s1", status="OK")]
+    trace = self._make_trace(spans)
+    assert trace.errors() == []
+
+  def test_render_shows_warning_for_parent_of_error(self):
+    parent = self._make_span("p1", status="OK",
+                             event_type="AGENT_STARTING")
+    child = self._make_span("c1", parent="p1", status="ERROR",
+                            error_message="broken",
+                            event_type="TOOL_ERROR")
+    trace = self._make_trace([parent, child])
+    output = trace.render()
+    # Parent should show warning icon (U+26A0)
+    assert "\u26a0" in output
+    # Child should show error icon (U+2717)
+    assert "\u2717" in output
+
+  def test_render_no_warning_when_all_ok(self):
+    parent = self._make_span("p1", status="OK",
+                             event_type="AGENT_STARTING")
+    child = self._make_span("c1", parent="p1", status="OK",
+                            event_type="TOOL_COMPLETED")
+    trace = self._make_trace([parent, child])
+    output = trace.render()
+    assert "\u26a0" not in output
+    assert "\u2717" not in output
+
+
+class TestEventTypeEnum:
+  """Tests for EventType enum completeness."""
+
+  def test_state_delta_exists(self):
+    from bigquery_agent_analytics.trace import EventType
+    assert EventType.STATE_DELTA.value == "STATE_DELTA"
+
+  def test_hitl_events_exist(self):
+    from bigquery_agent_analytics.trace import EventType
+    assert EventType.HITL_CONFIRMATION_REQUEST.value == (
+        "HITL_CONFIRMATION_REQUEST"
+    )
+    assert EventType.HITL_CREDENTIAL_REQUEST.value == (
+        "HITL_CREDENTIAL_REQUEST"
+    )
+    assert EventType.HITL_INPUT_REQUEST.value == (
+        "HITL_INPUT_REQUEST"
+    )
