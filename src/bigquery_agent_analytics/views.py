@@ -15,7 +15,7 @@
 """Event-specific BigQuery views for agent analytics.
 
 Creates standard (non-materialized) BigQuery views that unnest the
-generic ``agent_events_v2`` table into per-event-type views with typed
+generic ``agent_events`` table into per-event-type views with typed
 columns.  Every view retains the standard identity headers:
 ``timestamp``, ``agent``, ``session_id``, ``invocation_id``.
 
@@ -26,7 +26,7 @@ Example usage::
     vm = ViewManager(
         project_id="my-project",
         dataset_id="analytics",
-        table_id="agent_events_v2",
+        table_id="agent_events",
     )
     vm.create_all_views()              # create all per-event views
     vm.create_view("LLM_REQUEST")      # create a single view
@@ -221,7 +221,7 @@ class ViewManager:
   Args:
       project_id: Google Cloud project ID.
       dataset_id: BigQuery dataset containing agent events.
-      table_id: Source table name (default ``agent_events_v2``).
+      table_id: Source table name (default ``agent_events``).
       view_prefix: Optional prefix for view names (e.g. ``"adk_"``).
       bq_client: Optional pre-configured BigQuery client.
   """
@@ -230,7 +230,7 @@ class ViewManager:
       self,
       project_id: str,
       dataset_id: str,
-      table_id: str = "agent_events_v2",
+      table_id: str = "agent_events",
       view_prefix: str = "adk_",
       bq_client: Optional[bigquery.Client] = None,
   ) -> None:

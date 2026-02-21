@@ -24,7 +24,7 @@ from bigquery_agent_analytics.views import ViewManager
 
 PROJECT = "test-project"
 DATASET = "analytics"
-TABLE = "agent_events_v2"
+TABLE = "agent_events"
 
 
 @pytest.fixture

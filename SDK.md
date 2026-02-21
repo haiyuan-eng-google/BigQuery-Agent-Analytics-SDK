@@ -18,7 +18,7 @@ from bigquery_agent_analytics import Client
 client = Client(
     project_id="my-gcp-project",
     dataset_id="agent_analytics",
-    table_id="agent_events_v2",       # default table name
+    table_id="agent_events",       # default table name
     location="us-central1",           # BigQuery dataset location
     gcs_bucket_name="my-trace-bucket",# optional: for GCS-offloaded payloads
     endpoint="gemini-2.5-flash",      # AI.GENERATE endpoint for LLM evals
@@ -30,7 +30,7 @@ client = Client(
 |-----------|------|---------|-------------|
 | `project_id` | `str` | *required* | Google Cloud project ID |
 | `dataset_id` | `str` | *required* | BigQuery dataset containing traces |
-| `table_id` | `str` | `"agent_events_v2"` | BigQuery table name |
+| `table_id` | `str` | `"agent_events"` | BigQuery table name |
 | `location` | `str` | `"us-central1"` | Dataset location |
 | `gcs_bucket_name` | `str \| None` | `None` | GCS bucket for offloaded payloads |
 | `verify_schema` | `bool` | `True` | Validate table schema on init |

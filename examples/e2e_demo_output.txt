@@ -3,7 +3,7 @@
 ================================================================
   Project  : test-project-0728-467323
   Dataset  : agent_analytics
-  Table    : agent_events_v2
+  Table    : agent_events
   Model    : gemini-3-flash-preview
   Location : US
 
@@ -250,7 +250,7 @@ Trace: e-3a59113e-29b5-499d-b81a-0c77f09d43d2 | Session: e2e-6fa45acfba30 | 1937
 
 [latency]
 Evaluation Report: latency_evaluator
-  Dataset: test-project-0728-467323.agent_analytics.agent_events_v2 WHERE session_id IN UNNEST(@session_ids)
+  Dataset: test-project-0728-467323.agent_analytics.agent_events WHERE session_id IN UNNEST(@session_ids)
   Sessions: 3
   Passed: 3 (100%)
   Failed: 0
@@ -259,7 +259,7 @@ Evaluation Report: latency_evaluator
 
 [turn_count]
 Evaluation Report: turn_count_evaluator
-  Dataset: test-project-0728-467323.agent_analytics.agent_events_v2 WHERE session_id IN UNNEST(@session_ids)
+  Dataset: test-project-0728-467323.agent_analytics.agent_events WHERE session_id IN UNNEST(@session_ids)
   Sessions: 3
   Passed: 3 (100%)
   Failed: 0
@@ -268,7 +268,7 @@ Evaluation Report: turn_count_evaluator
 
 [error_rate]
 Evaluation Report: error_rate_evaluator
-  Dataset: test-project-0728-467323.agent_analytics.agent_events_v2 WHERE session_id IN UNNEST(@session_ids)
+  Dataset: test-project-0728-467323.agent_analytics.agent_events WHERE session_id IN UNNEST(@session_ids)
   Sessions: 3
   Passed: 3 (100%)
   Failed: 0
@@ -277,7 +277,7 @@ Evaluation Report: error_rate_evaluator
 
 [token_efficiency]
 Evaluation Report: token_efficiency_evaluator
-  Dataset: test-project-0728-467323.agent_analytics.agent_events_v2 WHERE session_id IN UNNEST(@session_ids)
+  Dataset: test-project-0728-467323.agent_analytics.agent_events WHERE session_id IN UNNEST(@session_ids)
   Sessions: 3
   Passed: 0 (0%)
   Failed: 3
@@ -288,7 +288,7 @@ Evaluation Report: token_efficiency_evaluator
 --- 2c. LLM-as-Judge Evaluation ---
 
 Evaluation Report: correctness_judge
-  Dataset: test-project-0728-467323.agent_analytics.agent_events_v2 WHERE session_id IN UNNEST(@session_ids)
+  Dataset: test-project-0728-467323.agent_analytics.agent_events WHERE session_id IN UNNEST(@session_ids)
   Sessions: 3
   Passed: 2 (67%)
   Failed: 1
@@ -412,4 +412,4 @@ user experience inefficiencies.
     - e2e-451318888b27
     - e2e-9936a6077916
     - e2e-6fa45acfba30
-  Traces logged to: test-project-0728-467323.agent_analytics.agent_events_v2
+  Traces logged to: test-project-0728-467323.agent_analytics.agent_events

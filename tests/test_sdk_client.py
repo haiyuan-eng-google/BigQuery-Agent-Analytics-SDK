@@ -412,7 +412,7 @@ class TestAIGenerateJudge:
     report = client._ai_generate_judge(
         evaluator,
         criterion,
-        "agent_events_v2",
+        "agent_events",
         "TRUE",
         [],
     )
@@ -449,7 +449,7 @@ class TestAIGenerateJudge:
     evaluator = LLMAsJudge.correctness()
     report = client._evaluate_llm_judge(
         evaluator,
-        "agent_events_v2",
+        "agent_events",
         "TRUE",
         [],
     )

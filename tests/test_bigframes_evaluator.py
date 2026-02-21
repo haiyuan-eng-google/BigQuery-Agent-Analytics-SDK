@@ -32,7 +32,7 @@ class TestBigFramesEvaluatorInit:
     )
     assert ev.endpoint == "gemini-2.5-flash"
     assert ev.connection_id is None
-    assert ev.table_id == "agent_events_v2"
+    assert ev.table_id == "agent_events"
 
   def test_custom_endpoint(self):
     ev = BigFramesEvaluator(

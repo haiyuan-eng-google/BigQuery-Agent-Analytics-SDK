@@ -72,7 +72,7 @@ from bigquery_agent_analytics.trace_evaluator import MatchType
 # ---------------------------------------------------------------------------
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "test-project-0728-467323")
 DATASET_ID = os.environ.get("BQ_DATASET", "agent_analytics")
-TABLE_ID = os.environ.get("BQ_TABLE", "agent_events_v2")
+TABLE_ID = os.environ.get("BQ_TABLE", "agent_events")
 MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-3-flash-preview")
 GCP_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
 LOCATION = "US"
