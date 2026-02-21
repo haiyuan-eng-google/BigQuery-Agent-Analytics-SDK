@@ -26,7 +26,7 @@ Example usage:
     evaluator = BigQueryTraceEvaluator(
         project_id="my-project",
         dataset_id="agent_analytics",
-        table_id="agent_events_v2",
+        table_id="agent_events",
     )
 
     results = await evaluator.evaluate_session(
@@ -396,7 +396,7 @@ class BigQueryTraceEvaluator:
       evaluator = BigQueryTraceEvaluator(
           project_id="my-project",
           dataset_id="agent_analytics",
-          table_id="agent_events_v2",
+          table_id="agent_events",
       )
 
       result = await evaluator.evaluate_session(
@@ -465,7 +465,7 @@ Required JSON format:
       self,
       project_id: str,
       dataset_id: str,
-      table_id: str = "agent_events_v2",
+      table_id: str = "agent_events",
       client: Optional[bigquery.Client] = None,
       llm_judge_model: Optional[str] = None,
   ) -> None:
@@ -474,7 +474,7 @@ Required JSON format:
     Args:
         project_id: Google Cloud project ID.
         dataset_id: BigQuery dataset ID containing trace data.
-        table_id: BigQuery table ID. Defaults to "agent_events_v2".
+        table_id: BigQuery table ID. Defaults to "agent_events".
         client: Optional BigQuery client. Created if not provided.
         llm_judge_model: Optional model name for LLM-as-judge evaluation.
     """

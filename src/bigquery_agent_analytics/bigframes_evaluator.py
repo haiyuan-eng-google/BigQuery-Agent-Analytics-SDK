@@ -28,7 +28,7 @@ Example usage::
     evaluator = BigFramesEvaluator(
         project_id="my-project",
         dataset_id="analytics",
-        table_id="agent_events_v2",
+        table_id="agent_events",
     )
 
     scores_df = evaluator.evaluate_sessions(max_sessions=50)
@@ -82,7 +82,7 @@ class BigFramesEvaluator:
       self,
       project_id: str,
       dataset_id: str,
-      table_id: str = "agent_events_v2",
+      table_id: str = "agent_events",
       endpoint: Optional[str] = None,
       connection_id: Optional[str] = None,
   ) -> None:

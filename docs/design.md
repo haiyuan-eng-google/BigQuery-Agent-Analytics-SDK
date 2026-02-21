@@ -70,7 +70,7 @@ This SDK bridges the gap between raw telemetry and actionable agent analytics.
                   │  Writes events
                   ▼
 ┌──────────────────────────────────────────────────────────┐
-│              BigQuery (agent_events_v2)                   │
+│              BigQuery (agent_events)                   │
 │                                                          │
 │  Partitioned by DATE(timestamp)                          │
 │  Clustered by event_type, agent, user_id                 │
@@ -240,7 +240,7 @@ The `Client` class is the primary interface for users who want a batteries-inclu
 Client(
     project_id: str,              # GCP project
     dataset_id: str,              # BigQuery dataset
-    table_id: str = "agent_events_v2",
+    table_id: str = "agent_events",
     location: str = "us-central1",
     gcs_bucket_name: str | None,  # For GCS-offloaded payload access
     verify_schema: bool = True,   # Schema validation on init
@@ -840,7 +840,7 @@ Returns `bigframes.DataFrame` that can be displayed directly in Jupyter notebook
 
 ## 5. Data Model
 
-### 5.1 BigQuery Table Schema (`agent_events_v2`)
+### 5.1 BigQuery Table Schema (`agent_events`)
 
 The canonical schema written by the ADK plugin and read by this SDK:
 

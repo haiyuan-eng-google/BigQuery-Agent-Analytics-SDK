@@ -396,7 +396,7 @@ class EmbeddingSearchClient:
       project_id: str,
       dataset_id: str,
       embeddings_table: str = "trace_embeddings",
-      source_table: str = "agent_events_v2",
+      source_table: str = "agent_events",
       client: Optional[bigquery.Client] = None,
       embedding_model: Optional[str] = None,
   ) -> None:
@@ -637,7 +637,7 @@ class AnomalyDetector:
       self,
       project_id: str,
       dataset_id: str,
-      table_id: str = "agent_events_v2",
+      table_id: str = "agent_events",
       client: Optional[bigquery.Client] = None,
   ) -> None:
     """Initializes AnomalyDetector.
@@ -1008,7 +1008,7 @@ class BatchEvaluator:
       self,
       project_id: str,
       dataset_id: str,
-      table_id: str = "agent_events_v2",
+      table_id: str = "agent_events",
       client: Optional[bigquery.Client] = None,
       eval_model: Optional[str] = None,
       endpoint: Optional[str] = None,

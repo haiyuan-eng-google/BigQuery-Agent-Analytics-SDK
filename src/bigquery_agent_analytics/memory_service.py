@@ -26,7 +26,7 @@ Example usage:
     memory_service = BigQueryMemoryService(
         project_id="my-project",
         dataset_id="agent_analytics",
-        table_id="agent_events_v2",
+        table_id="agent_events",
     )
 
     # Retrieve relevant past context
@@ -165,7 +165,7 @@ class BigQuerySessionMemory:
       self,
       project_id: str,
       dataset_id: str,
-      table_id: str = "agent_events_v2",
+      table_id: str = "agent_events",
       client: Optional[bigquery.Client] = None,
   ) -> None:
     """Initializes BigQuerySessionMemory.
@@ -297,7 +297,7 @@ class BigQueryEpisodicMemory:
       self,
       project_id: str,
       dataset_id: str,
-      table_id: str = "agent_events_v2",
+      table_id: str = "agent_events",
       embeddings_table_id: Optional[str] = None,
       client: Optional[bigquery.Client] = None,
       embedding_model: Optional[str] = None,
@@ -717,7 +717,7 @@ class UserProfileBuilder:
       self,
       project_id: str,
       dataset_id: str,
-      table_id: str = "agent_events_v2",
+      table_id: str = "agent_events",
       client: Optional[bigquery.Client] = None,
   ) -> None:
     """Initializes UserProfileBuilder.
@@ -891,7 +891,7 @@ class BigQueryMemoryService(BaseMemoryService):
       self,
       project_id: str,
       dataset_id: str,
-      table_id: str = "agent_events_v2",
+      table_id: str = "agent_events",
       client: Optional[bigquery.Client] = None,
       embedding_model: Optional[str] = None,
   ) -> None:
