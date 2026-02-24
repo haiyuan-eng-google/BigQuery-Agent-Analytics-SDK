@@ -173,10 +173,10 @@ class TestClientGetTrace:
         verify_schema=False,
         bq_client=mock_bq,
     )
-    trace = client.get_trace("sess-1")
+    trace = client.get_trace("trace-1")
 
-    assert trace.session_id == "sess-1"
     assert trace.trace_id == "trace-1"
+    assert trace.session_id == "sess-1"
     assert len(trace.spans) == 3
     assert trace.user_id == "user-1"
 

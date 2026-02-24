@@ -22,7 +22,7 @@ hierarchical DAG view of the agent's reasoning steps.
 Example usage::
 
     client = Client(project_id="my-project", dataset_id="analytics")
-    trace = client.get_trace("session-123")
+    trace = client.get_trace("trace-123")
     trace.render()  # Prints hierarchical DAG in notebook/terminal
 """
 

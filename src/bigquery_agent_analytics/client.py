@@ -28,7 +28,7 @@ Example usage::
     )
 
     # Retrieve and visualize a trace
-    trace = client.get_trace("session-123")
+    trace = client.get_trace("trace-123")
     trace.render()
 
     # Run evaluation
@@ -112,7 +112,7 @@ SELECT
   error_message,
   is_truncated
 FROM `{project}.{dataset}.{table}`
-WHERE session_id = @session_id
+WHERE trace_id = @trace_id
 ORDER BY timestamp ASC
 """
 
@@ -265,13 +265,13 @@ class Client:
   # -------------------------------------------------------------- #
 
   def get_trace(self, trace_id: str) -> Trace:
-    """Fetches all spans for a specific session trace.
+    """Fetches all spans for a specific trace.
 
     Automatically resolves GCS-offloaded payloads if
     ``gcs_bucket_name`` was provided during initialization.
 
     Args:
-        trace_id: The session ID (trace ID) to retrieve.
+        trace_id: The trace ID to retrieve.
 
     Returns:
         A Trace object with all spans.
@@ -287,7 +287,7 @@ class Client:
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ScalarQueryParameter(
-                "session_id",
+                "trace_id",
                 "STRING",
                 trace_id,
             ),
@@ -303,12 +303,12 @@ class Client:
 
     # Determine trace metadata
     user_id = None
-    bq_trace_id = None
+    session_id = None
     for row in results:
       if not user_id:
         user_id = row.get("user_id")
-      if not bq_trace_id:
-        bq_trace_id = row.get("trace_id")
+      if not session_id:
+        session_id = row.get("session_id")
 
     timestamps = [s.timestamp for s in spans if s.timestamp]
     start = min(timestamps) if timestamps else None
@@ -318,8 +318,8 @@ class Client:
       total_ms = (end - start).total_seconds() * 1000
 
     return Trace(
-        trace_id=bq_trace_id or trace_id,
-        session_id=trace_id,
+        trace_id=trace_id,
+        session_id=session_id or "",
         spans=spans,
         user_id=user_id,
         start_time=start,
