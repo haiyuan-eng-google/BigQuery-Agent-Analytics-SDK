@@ -344,6 +344,16 @@ def _is_legacy_model_ref(ref: str) -> bool:
   return ref.count(".") >= 2
 
 
+def _sanitize_categories(categories_str: str) -> str:
+  """Escapes category text for safe embedding in SQL string literals.
+
+  Doubles single quotes and strips backslashes to prevent SQL
+  injection or query breakage when custom category labels are
+  formatted into ``CONCAT(...)`` prompt text.
+  """
+  return categories_str.replace("\\", "\\\\").replace("'", "''")
+
+
 async def compute_drift(
     bq_client: Any,
     project_id: str,
@@ -771,7 +781,7 @@ async def _semantic_grouping(
   if text_model and (
       config.custom_categories or config.mode == "auto_group_using_semantics"
   ):
-    categories_str = ", ".join(
+    raw_categories = ", ".join(
         config.custom_categories
         or [
             "General Inquiry",
@@ -782,6 +792,7 @@ async def _semantic_grouping(
             "Other",
         ]
     )
+    categories_str = _sanitize_categories(raw_categories)
 
     # Try AI.GENERATE first when the endpoint is not a legacy ref
     if not _is_legacy_model_ref(text_model):

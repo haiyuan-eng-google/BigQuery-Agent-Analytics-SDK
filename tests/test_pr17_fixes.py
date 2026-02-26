@@ -46,6 +46,7 @@ from bigquery_agent_analytics.feedback import \
   _AI_GENERATE_SEMANTIC_GROUPING_QUERY
 from bigquery_agent_analytics.feedback import _is_legacy_model_ref
 from bigquery_agent_analytics.feedback import _LEGACY_SEMANTIC_GROUPING_QUERY
+from bigquery_agent_analytics.feedback import _sanitize_categories
 from bigquery_agent_analytics.feedback import _semantic_drift
 from bigquery_agent_analytics.feedback import AnalysisConfig
 from bigquery_agent_analytics.feedback import compute_drift
@@ -564,3 +565,42 @@ class TestIncludeEventTypes:
     assert "IN UNNEST(@event_types)" in (
         BigQueryTraceEvaluator._SESSION_TRACE_QUERY
     )
+
+
+# ================================================================== #
+# SQL injection: _sanitize_categories                                  #
+# ================================================================== #
+
+
+class TestSanitizeCategories:
+  """_sanitize_categories should escape SQL-unsafe characters."""
+
+  def test_plain_string_unchanged(self):
+    """Normal text passes through unchanged."""
+    assert _sanitize_categories("Billing, Technical") == "Billing, Technical"
+
+  def test_single_quote_doubled(self):
+    """Single quotes are doubled for safe SQL embedding."""
+    assert _sanitize_categories("It's broken") == "It''s broken"
+
+  def test_backslash_escaped(self):
+    """Backslashes are escaped."""
+    assert _sanitize_categories("path\\name") == "path\\\\name"
+
+  def test_combined_escaping(self):
+    """Both quotes and backslashes are handled together."""
+    result = _sanitize_categories("O'Brien's \\data")
+    assert result == "O''Brien''s \\\\data"
+
+  def test_empty_string(self):
+    assert _sanitize_categories("") == ""
+
+  def test_no_v2_in_notebook_demo(self):
+    """e2e_notebook_demo.ipynb should not default to agent_events_v2."""
+    notebook_path = ROOT / "examples" / "e2e_notebook_demo.ipynb"
+    if notebook_path.exists():
+      text = notebook_path.read_text()
+      # Should not have agent_events_v2 as default value
+      assert (
+          '"agent_events_v2"' not in text
+      ), "e2e_notebook_demo.ipynb still references agent_events_v2"
