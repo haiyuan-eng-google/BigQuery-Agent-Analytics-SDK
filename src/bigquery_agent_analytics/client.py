@@ -45,9 +45,9 @@ Example usage::
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
-from typing import Any
-from typing import Optional
+from typing import Any, Optional
 
 from google.cloud import bigquery
 
@@ -179,23 +179,33 @@ WHERE table_name IN ('agent_events', 'agent_events_v2')
 _AUTO_DETECT_TABLES = ["agent_events", "agent_events_v2"]
 
 _HITL_METRICS_QUERY = """\
+WITH hitl_global AS (
+  SELECT COUNT(DISTINCT session_id) AS global_hitl_sessions
+  FROM `{project}.{dataset}.{table}`
+  WHERE event_type LIKE 'HITL_%'
+    AND {where}
+),
+hitl_by_type AS (
+  SELECT
+    event_type,
+    COUNT(*) AS event_count,
+    COUNT(DISTINCT session_id) AS session_count,
+    AVG(
+      CAST(
+        JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS FLOAT64
+      )
+    ) AS avg_latency_ms
+  FROM `{project}.{dataset}.{table}`
+  WHERE event_type LIKE 'HITL_%'
+    AND {where}
+  GROUP BY event_type
+)
 SELECT
-  event_type,
-  COUNT(*) AS event_count,
-  COUNT(DISTINCT session_id) AS session_count,
-  COUNTIF(
-    ENDS_WITH(event_type, '_COMPLETED')
-  ) AS completed_count,
-  AVG(
-    CAST(
-      JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS FLOAT64
-    )
-  ) AS avg_latency_ms
-FROM `{project}.{dataset}.{table}`
-WHERE event_type LIKE 'HITL_%'
-  AND {where}
-GROUP BY event_type
-ORDER BY event_count DESC
+  g.global_hitl_sessions,
+  t.*
+FROM hitl_by_type t
+CROSS JOIN hitl_global g
+ORDER BY t.event_count DESC
 """
 
 _EVENT_COVERAGE_QUERY = """\
@@ -207,6 +217,49 @@ WHERE {where}
 GROUP BY event_type
 ORDER BY event_count DESC
 """
+
+_GET_SESSION_TRACE_QUERY = """\
+SELECT
+  event_type,
+  agent,
+  timestamp,
+  session_id,
+  invocation_id,
+  user_id,
+  trace_id,
+  span_id,
+  parent_span_id,
+  content,
+  content_parts,
+  attributes,
+  latency_ms,
+  status,
+  error_message,
+  is_truncated
+FROM `{project}.{dataset}.{table}`
+WHERE session_id = @session_id
+ORDER BY timestamp ASC
+"""
+
+
+def _run_sync(coro):
+  """Runs a coroutine from synchronous code.
+
+  Safe under already-running event loops (e.g. Jupyter notebooks,
+  async applications).  Falls back to a thread-pool executor when
+  a loop is already active.
+  """
+  try:
+    loop = asyncio.get_running_loop()
+  except RuntimeError:
+    loop = None
+
+  if loop and loop.is_running():
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=1,
+    ) as pool:
+      return pool.submit(asyncio.run, coro).result()
+  return asyncio.run(coro)
 
 
 # ------------------------------------------------------------------ #
@@ -228,8 +281,8 @@ class Client:
           to auto-detect (tries ``agent_events`` first, then
           ``agent_events_v2``).
       location: BigQuery dataset location.
-      gcs_bucket_name: Optional GCS bucket for resolving offloaded
-          multimodal payloads.
+      gcs_bucket_name: Optional GCS bucket name (reserved for future
+          GCS-offloaded payload resolution; not yet implemented).
       verify_schema: Whether to verify the table schema on init.
       endpoint: AI.GENERATE endpoint (default gemini-2.5-flash).
           Pass a fully-qualified BQ ML model reference
@@ -533,7 +586,7 @@ class Client:
     request_counts: dict[str, int] = {}
     completed_counts: dict[str, int] = {}
     total_events = 0
-    total_sessions = set()
+    global_hitl_sessions = 0
 
     for row in rows:
       r = dict(row)
@@ -541,7 +594,8 @@ class Client:
       count = r.get("event_count", 0)
       sessions = r.get("session_count", 0)
       total_events += count
-      total_sessions.update(range(sessions))
+      # Global distinct session count from the CROSS JOIN
+      global_hitl_sessions = r.get("global_hitl_sessions", 0)
 
       events.append(
           {
@@ -567,7 +621,7 @@ class Client:
 
     return {
         "total_hitl_events": total_events,
-        "total_hitl_sessions": len(total_sessions),
+        "total_hitl_sessions": global_hitl_sessions,
         "events": events,
         "completion_rates": completion_rates,
     }
@@ -577,10 +631,10 @@ class Client:
   # -------------------------------------------------------------- #
 
   def get_trace(self, trace_id: str) -> Trace:
-    """Fetches all spans for a specific trace.
+    """Fetches all spans for a specific trace by ``trace_id``.
 
-    Automatically resolves GCS-offloaded payloads if
-    ``gcs_bucket_name`` was provided during initialization.
+    Use :meth:`get_session_trace` to query by ``session_id``
+    instead.
 
     Args:
         trace_id: The trace ID to retrieve.
@@ -632,6 +686,68 @@ class Client:
     return Trace(
         trace_id=trace_id,
         session_id=session_id or "",
+        spans=spans,
+        user_id=user_id,
+        start_time=start,
+        end_time=end,
+        total_latency_ms=total_ms,
+    )
+
+  def get_session_trace(self, session_id: str) -> Trace:
+    """Fetches all spans for a specific session by ``session_id``.
+
+    Unlike :meth:`get_trace` which queries by ``trace_id``, this
+    method filters by ``session_id``.
+
+    Args:
+        session_id: The session ID to retrieve.
+
+    Returns:
+        A Trace object with all spans for the session.
+
+    Raises:
+        ValueError: If no events found for the session ID.
+    """
+    query = _GET_SESSION_TRACE_QUERY.format(
+        project=self.project_id,
+        dataset=self.dataset_id,
+        table=self.table_id,
+    )
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter(
+                "session_id",
+                "STRING",
+                session_id,
+            ),
+        ]
+    )
+
+    results = list(self.bq_client.query(query, job_config=job_config).result())
+
+    if not results:
+      raise ValueError(f"No events found for session_id={session_id}")
+
+    spans = [Span.from_bigquery_row(dict(row)) for row in results]
+
+    user_id = None
+    trace_id = None
+    for row in results:
+      if not user_id:
+        user_id = row.get("user_id")
+      if not trace_id:
+        trace_id = row.get("trace_id")
+
+    timestamps = [s.timestamp for s in spans if s.timestamp]
+    start = min(timestamps) if timestamps else None
+    end = max(timestamps) if timestamps else None
+    total_ms = None
+    if start and end:
+      total_ms = (end - start).total_seconds() * 1000
+
+    return Trace(
+        trace_id=trace_id or session_id,
+        session_id=session_id,
         spans=spans,
         user_id=user_id,
         start_time=start,
@@ -695,8 +811,10 @@ class Client:
             comparison evaluation.
         strict: When ``True``, sessions with unparseable or
             empty judge output are marked as failed instead of
-            silently passing.  The report ``details`` will
-            include a ``parse_errors`` count.
+            silently passing.  Affected sessions get
+            ``parse_error: True`` in their details, and
+            ``aggregate_scores`` includes a ``parse_errors``
+            count.
 
     Returns:
         EvaluationReport with per-session and aggregate scores.
@@ -1003,13 +1121,7 @@ class Client:
     results = list(self.bq_client.query(query, job_config=job_config).result())
     traces = _build_traces_from_rows(results)
 
-    loop = asyncio.new_event_loop()
-    try:
-      session_scores = loop.run_until_complete(
-          self._run_api_judge(evaluator, traces)
-      )
-    finally:
-      loop.close()
+    session_scores = _run_sync(self._run_api_judge(evaluator, traces))
 
     return _build_report(
         evaluator_name=evaluator.name,
@@ -1070,22 +1182,18 @@ class Client:
     filt = filters or TraceFilter()
     where, params = filt.to_sql_conditions()
 
-    loop = asyncio.new_event_loop()
-    try:
-      return loop.run_until_complete(
-          compute_drift(
-              bq_client=self.bq_client,
-              project_id=self.project_id,
-              dataset_id=self.dataset_id,
-              table_id=table,
-              golden_table=golden_dataset,
-              where_clause=where,
-              query_params=params,
-              embedding_model=embedding_model,
-          )
-      )
-    finally:
-      loop.close()
+    return _run_sync(
+        compute_drift(
+            bq_client=self.bq_client,
+            project_id=self.project_id,
+            dataset_id=self.dataset_id,
+            table_id=table,
+            golden_table=golden_dataset,
+            where_clause=where,
+            query_params=params,
+            embedding_model=embedding_model,
+        )
+    )
 
   # -------------------------------------------------------------- #
   # Insights                                                         #
@@ -1117,18 +1225,14 @@ class Client:
     Returns:
         InsightsReport with facets, analysis, and summary.
     """
-    loop = asyncio.new_event_loop()
-    try:
-      return loop.run_until_complete(
-          self._run_insights(
-              filters=filters,
-              config=config,
-              dataset=dataset,
-              text_model=text_model,
-          )
-      )
-    finally:
-      loop.close()
+    return _run_sync(
+        self._run_insights(
+            filters=filters,
+            config=config,
+            dataset=dataset,
+            text_model=text_model,
+        )
+    )
 
   async def _run_insights(
       self,
@@ -1474,22 +1578,85 @@ class Client:
 
     model = text_model or self.endpoint
 
-    loop = asyncio.new_event_loop()
-    try:
-      return loop.run_until_complete(
-          compute_question_distribution(
-              bq_client=self.bq_client,
-              project_id=self.project_id,
-              dataset_id=self.dataset_id,
-              table_id=table,
-              where_clause=where,
-              query_params=params,
-              config=config,
-              text_model=model,
-          )
-      )
-    finally:
-      loop.close()
+    return _run_sync(
+        compute_question_distribution(
+            bq_client=self.bq_client,
+            project_id=self.project_id,
+            dataset_id=self.dataset_id,
+            table_id=table,
+            where_clause=where,
+            query_params=params,
+            config=config,
+            text_model=model,
+        )
+    )
+
+  # -------------------------------------------------------------- #
+  # Async Public APIs                                                #
+  # -------------------------------------------------------------- #
+
+  async def insights_async(
+      self,
+      filters: Optional[TraceFilter] = None,
+      config: Optional[InsightsConfig] = None,
+      dataset: Optional[str] = None,
+      text_model: Optional[str] = None,
+  ) -> InsightsReport:
+    """Async version of :meth:`insights`."""
+    return await self._run_insights(
+        filters=filters,
+        config=config,
+        dataset=dataset,
+        text_model=text_model,
+    )
+
+  async def drift_detection_async(
+      self,
+      golden_dataset: str,
+      filters: Optional[TraceFilter] = None,
+      dataset: Optional[str] = None,
+      embedding_model: Optional[str] = None,
+  ) -> DriftReport:
+    """Async version of :meth:`drift_detection`."""
+    table = dataset or self.table_id
+    filt = filters or TraceFilter()
+    where, params = filt.to_sql_conditions()
+
+    return await compute_drift(
+        bq_client=self.bq_client,
+        project_id=self.project_id,
+        dataset_id=self.dataset_id,
+        table_id=table,
+        golden_table=golden_dataset,
+        where_clause=where,
+        query_params=params,
+        embedding_model=embedding_model,
+    )
+
+  async def deep_analysis_async(
+      self,
+      filters: Optional[TraceFilter] = None,
+      configuration: Optional[AnalysisConfig] = None,
+      dataset: Optional[str] = None,
+      text_model: Optional[str] = None,
+  ) -> QuestionDistribution:
+    """Async version of :meth:`deep_analysis`."""
+    table = dataset or self.table_id
+    filt = filters or TraceFilter()
+    where, params = filt.to_sql_conditions()
+    config = configuration or AnalysisConfig()
+    model = text_model or self.endpoint
+
+    return await compute_question_distribution(
+        bq_client=self.bq_client,
+        project_id=self.project_id,
+        dataset_id=self.dataset_id,
+        table_id=table,
+        where_clause=where,
+        query_params=params,
+        config=config,
+        text_model=model,
+    )
 
 
 # ------------------------------------------------------------------ #
@@ -1560,11 +1727,10 @@ def _merge_criterion_reports(
   session_scores = []
   for sid, data in session_data.items():
     scores = data["scores"]
-    # Must have at least one score AND all criteria above threshold
+    # Must have at least one score AND all criteria above threshold.
+    # Missing criteria default to 0.0 (guaranteed fail).
     passed = bool(scores) and all(
-        scores.get(c.name, 0.0) >= thresholds.get(c.name, 0.5)
-        for c in criteria
-        if c.name in scores
+        scores.get(c.name, 0.0) >= thresholds.get(c.name, 0.5) for c in criteria
     )
     session_scores.append(
         SessionScore(
@@ -1629,8 +1795,10 @@ def _build_traces_from_rows(results: list) -> list[Trace]:
 def _apply_strict_mode(report: EvaluationReport) -> EvaluationReport:
   """Marks sessions with empty scores as failed (strict mode).
 
-  Returns a new report with updated pass/fail counts and a
-  ``parse_errors`` count in each affected session's ``details``.
+  Returns a new report with updated pass/fail counts.  Each
+  affected session gets ``parse_error: True`` in its details,
+  and the report-level ``aggregate_scores`` includes a
+  ``parse_errors`` count.
   """
   parse_errors = 0
   new_scores = []
@@ -1650,12 +1818,15 @@ def _apply_strict_mode(report: EvaluationReport) -> EvaluationReport:
       new_scores.append(ss)
 
   passed = sum(1 for s in new_scores if s.passed)
+  agg = dict(report.aggregate_scores)
+  if parse_errors:
+    agg["parse_errors"] = float(parse_errors)
   return EvaluationReport(
       dataset=report.dataset,
       evaluator_name=report.evaluator_name,
       total_sessions=report.total_sessions,
       passed_sessions=passed,
       failed_sessions=report.total_sessions - passed,
-      aggregate_scores=report.aggregate_scores,
+      aggregate_scores=agg,
       session_scores=new_scores,
   )

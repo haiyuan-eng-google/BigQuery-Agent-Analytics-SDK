@@ -35,8 +35,7 @@ from datetime import timezone
 from enum import Enum
 import json
 import logging
-from typing import Any
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger("bigquery_agent_analytics." + __name__)
 
@@ -59,15 +58,9 @@ class EventType(Enum):
   HITL_CONFIRMATION_REQUEST = "HITL_CONFIRMATION_REQUEST"
   HITL_CREDENTIAL_REQUEST = "HITL_CREDENTIAL_REQUEST"
   HITL_INPUT_REQUEST = "HITL_INPUT_REQUEST"
-  HITL_CONFIRMATION_REQUEST_COMPLETED = (
-      "HITL_CONFIRMATION_REQUEST_COMPLETED"
-  )
-  HITL_CREDENTIAL_REQUEST_COMPLETED = (
-      "HITL_CREDENTIAL_REQUEST_COMPLETED"
-  )
-  HITL_INPUT_REQUEST_COMPLETED = (
-      "HITL_INPUT_REQUEST_COMPLETED"
-  )
+  HITL_CONFIRMATION_REQUEST_COMPLETED = "HITL_CONFIRMATION_REQUEST_COMPLETED"
+  HITL_CREDENTIAL_REQUEST_COMPLETED = "HITL_CREDENTIAL_REQUEST_COMPLETED"
+  HITL_INPUT_REQUEST_COMPLETED = "HITL_INPUT_REQUEST_COMPLETED"
 
 
 @dataclass
@@ -191,8 +184,17 @@ class Span:
 
   @property
   def is_error(self) -> bool:
-    """Returns True if this span has ERROR status."""
-    return self.status == "ERROR"
+    """Returns True if this span represents an error.
+
+    Uses the canonical predicate: event type ends with
+    ``_ERROR``, ``error_message`` is set, or ``status`` is
+    ``'ERROR'``.
+    """
+    return (
+        self.event_type.endswith("_ERROR")
+        or self.error_message is not None
+        or self.status == "ERROR"
+    )
 
   @property
   def subtree_has_error(self) -> bool:
@@ -235,7 +237,7 @@ class Span:
       if model:
         parts.append(f"({model})")
 
-    if self.status == "ERROR":
+    if self.is_error:
       parts.append("ERROR")
 
     return " ".join(parts)
@@ -349,9 +351,17 @@ class TraceFilter:
           )
       )
     if self.has_error is True:
-      conditions.append("status = 'ERROR'")
+      conditions.append(
+          "(ENDS_WITH(event_type, '_ERROR')"
+          " OR error_message IS NOT NULL"
+          " OR status = 'ERROR')"
+      )
     elif self.has_error is False:
-      conditions.append("status != 'ERROR'")
+      conditions.append(
+          "NOT ENDS_WITH(event_type, '_ERROR')"
+          " AND error_message IS NULL"
+          " AND status != 'ERROR'"
+      )
     if self.error_type:
       conditions.append("error_message LIKE @error_type")
       params.append(
@@ -533,7 +543,7 @@ class Trace:
 
   def _render_flat_span(self, span: Span, lines: list[str]) -> None:
     """Renders a single span without tree structure."""
-    status_icon = "\u2717" if span.status == "ERROR" else "\u2713"
+    status_icon = "\u2717" if span.is_error else "\u2713"
     latency = ""
     if span.latency_ms is not None:
       latency = f" ({span.latency_ms:.0f}ms)"
@@ -555,9 +565,8 @@ class Trace:
       elif span.event_type in ("TOOL_COMPLETED", "TOOL_ERROR"):
         key = span.span_id or span.content.get("tool", "")
         start = starts.pop(key, None)
-        origin = (
-            span.content.get("tool_origin")
-            or (start.content.get("tool_origin") if start else None)
+        origin = span.content.get("tool_origin") or (
+            start.content.get("tool_origin") if start else None
         )
         entry = {
             "tool_name": span.content.get("tool", "unknown"),
@@ -604,8 +613,8 @@ class Trace:
 
   @property
   def error_spans(self) -> list[Span]:
-    """Returns all spans with ERROR status."""
-    return [s for s in self.spans if s.status == "ERROR"]
+    """Returns all error spans (canonical predicate)."""
+    return [s for s in self.spans if s.is_error]
 
   def errors(self) -> list[dict[str, Any]]:
     """Returns error spans with full failure context.

@@ -47,17 +47,15 @@ from datetime import timedelta
 from datetime import timezone
 import json
 import logging
-from typing import Any
-from typing import Optional
-
-from google.cloud import bigquery
-from pydantic import BaseModel
-from pydantic import Field
+from typing import Any, Optional
 
 from google.adk.memory.base_memory_service import BaseMemoryService
 from google.adk.memory.base_memory_service import SearchMemoryResponse
 from google.adk.memory.memory_entry import MemoryEntry
 from google.adk.sessions.session import Session
+from google.cloud import bigquery
+from pydantic import BaseModel
+from pydantic import Field
 
 logger = logging.getLogger("bigquery_agent_analytics." + __name__)
 
@@ -156,7 +154,7 @@ class BigQuerySessionMemory:
     e.agent
   FROM `{project}.{dataset}.{table}` e
   JOIN recent_sessions rs ON e.session_id = rs.session_id
-  WHERE e.event_type IN ('USER_MESSAGE_RECEIVED', 'AGENT_COMPLETED')
+  WHERE e.event_type IN ('USER_MESSAGE_RECEIVED', 'LLM_RESPONSE', 'AGENT_COMPLETED')
   ORDER BY e.timestamp DESC
   LIMIT @max_events
   """
@@ -249,7 +247,7 @@ class BigQuerySessionMemory:
         content = row.get("content_summary") or ""
         if content and not episodes[session_id].user_message:
           episodes[session_id].user_message = content
-      elif event_type == "AGENT_COMPLETED":
+      elif event_type in ("LLM_RESPONSE", "AGENT_COMPLETED"):
         response = row.get("response") or row.get("content_summary")
         if response and not episodes[session_id].agent_response:
           episodes[session_id].agent_response = response
@@ -660,9 +658,8 @@ class ContextManager:
     conversation_text = "\n".join(text_parts)
 
     try:
-      from google.genai import types
-
       from google import genai
+      from google.genai import types
 
       client = genai.Client()
       response = await client.aio.models.generate_content(
@@ -835,9 +832,8 @@ class UserProfileBuilder:
   ) -> None:
     """Uses LLM to extract user patterns from messages."""
     try:
-      from google.genai import types
-
       from google import genai
+      from google.genai import types
 
       messages_text = "\n".join(messages[:50])  # Limit for context
 

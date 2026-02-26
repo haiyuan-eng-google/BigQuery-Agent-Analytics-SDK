@@ -45,8 +45,7 @@ from datetime import datetime
 from datetime import timezone
 import json
 import logging
-from typing import Any
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
 from pydantic import Field
@@ -398,7 +397,11 @@ SELECT
     DISTINCT JSON_EXTRACT_SCALAR(content, '$.tool')
     IGNORE NULLS
   ) AS tools_used,
-  COUNTIF(status = 'ERROR') > 0 AS has_error,
+  COUNTIF(
+    ENDS_WITH(event_type, '_ERROR')
+    OR error_message IS NOT NULL
+    OR status = 'ERROR'
+  ) > 0 AS has_error,
   MIN(timestamp) AS start_time,
   MAX(timestamp) AS end_time
 FROM `{project}.{dataset}.{table}`
@@ -1032,9 +1035,8 @@ async def extract_facets_via_api(
   facets = []
 
   try:
-    from google.genai import types
-
     from google import genai
+    from google.genai import types
 
     client = genai.Client()
 
@@ -1103,9 +1105,8 @@ async def run_analysis_prompt(
     return AnalysisSection(title=title, content="")
 
   try:
-    from google.genai import types
-
     from google import genai
+    from google.genai import types
 
     client = genai.Client()
     response = await client.aio.models.generate_content(
@@ -1163,9 +1164,8 @@ async def generate_executive_summary(
   )
 
   try:
-    from google.genai import types
-
     from google import genai
+    from google.genai import types
 
     client = genai.Client()
     response = await client.aio.models.generate_content(

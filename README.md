@@ -50,7 +50,7 @@ pip install bigquery-agent-analytics[bigframes]
 from bigquery_agent_analytics import Client
 
 client = Client(project_id="my-project", dataset_id="analytics")
-trace = client.get_trace("session-123")
+trace = client.get_trace("trace-abc-123")
 trace.render()
 ```
 

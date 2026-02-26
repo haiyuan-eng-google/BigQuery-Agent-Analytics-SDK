@@ -43,8 +43,7 @@ import asyncio
 import logging
 import math
 import statistics
-from typing import Any
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
 from pydantic import Field
