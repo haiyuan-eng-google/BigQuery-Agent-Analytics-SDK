@@ -90,6 +90,14 @@ class EvaluationReport(BaseModel):
       default_factory=dict,
       description="Average scores across all sessions.",
   )
+  details: dict[str, Any] = Field(
+      default_factory=dict,
+      description=(
+          "Operational metadata (parse_errors, fallback_mode, etc.)."
+          " Separated from aggregate_scores so downstream consumers"
+          " can treat scores as purely normalized metrics."
+      ),
+  )
   session_scores: list[SessionScore] = Field(
       default_factory=list,
   )

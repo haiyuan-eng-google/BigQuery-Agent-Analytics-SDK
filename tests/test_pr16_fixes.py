@@ -557,9 +557,9 @@ class TestGetTraceDocsUseTraceId:
 
 
 class TestStrictModeParseErrors:
-  """Strict mode adds parse_errors to aggregate_scores."""
+  """Strict mode puts parse_errors in report.details."""
 
-  def test_parse_errors_in_aggregate(self):
+  def test_parse_errors_in_details(self):
     report = EvaluationReport(
         dataset="test",
         evaluator_name="judge",
@@ -587,7 +587,8 @@ class TestStrictModeParseErrors:
     )
     strict_report = _apply_strict_mode(report)
 
-    assert strict_report.aggregate_scores.get("parse_errors") == 1.0
+    assert strict_report.details["parse_errors"] == 1
+    assert "parse_errors" not in strict_report.aggregate_scores
     assert strict_report.passed_sessions == 2
     assert strict_report.failed_sessions == 1
 
@@ -609,8 +610,10 @@ class TestStrictModeParseErrors:
     )
     strict_report = _apply_strict_mode(report)
 
-    # parse_errors is always present for stable output schema.
-    assert strict_report.aggregate_scores["parse_errors"] == 0.0
+    # parse_errors always present in details for stable schema.
+    assert strict_report.details["parse_errors"] == 0
+    assert strict_report.details["parse_error_rate"] == 0.0
+    assert "parse_errors" not in strict_report.aggregate_scores
 
 
 # ================================================================== #

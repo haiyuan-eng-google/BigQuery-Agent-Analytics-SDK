@@ -810,9 +810,10 @@ class Client:
         strict: When ``True``, sessions with unparseable or
             empty judge output are marked as failed instead of
             silently passing.  Affected sessions get
-            ``parse_error: True`` in their details, and
-            ``aggregate_scores`` includes a ``parse_errors``
-            count (always present, ``0.0`` when no errors).
+            ``parse_error: True`` in their per-session details,
+            and report-level ``details`` includes
+            ``parse_errors`` (int) and ``parse_error_rate``
+            (float) — separate from ``aggregate_scores``.
 
     Returns:
         EvaluationReport with per-session and aggregate scores.
@@ -1794,9 +1795,11 @@ def _apply_strict_mode(report: EvaluationReport) -> EvaluationReport:
   """Marks sessions with empty scores as failed (strict mode).
 
   Returns a new report with updated pass/fail counts.  Each
-  affected session gets ``parse_error: True`` in its details,
-  and the report-level ``aggregate_scores`` includes a
-  ``parse_errors`` count.
+  affected session gets ``parse_error: True`` in its details.
+  Operational counters (``parse_errors``, ``parse_error_rate``)
+  are placed in the report-level ``details`` dict — not in
+  ``aggregate_scores`` — so downstream consumers can treat
+  scores as purely normalized metrics.
   """
   parse_errors = 0
   new_scores = []
@@ -1816,14 +1819,18 @@ def _apply_strict_mode(report: EvaluationReport) -> EvaluationReport:
       new_scores.append(ss)
 
   passed = sum(1 for s in new_scores if s.passed)
-  agg = dict(report.aggregate_scores)
-  agg["parse_errors"] = float(parse_errors)
+  details = dict(report.details)
+  details["parse_errors"] = parse_errors
+  details["parse_error_rate"] = (
+      parse_errors / report.total_sessions if report.total_sessions else 0.0
+  )
   return EvaluationReport(
       dataset=report.dataset,
       evaluator_name=report.evaluator_name,
       total_sessions=report.total_sessions,
       passed_sessions=passed,
       failed_sessions=report.total_sessions - passed,
-      aggregate_scores=agg,
+      aggregate_scores=report.aggregate_scores,
+      details=details,
       session_scores=new_scores,
   )

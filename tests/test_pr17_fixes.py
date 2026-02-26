@@ -336,9 +336,9 @@ class TestAgentEventsV2Consistency:
 
 
 class TestStrictModeParseErrorsStable:
-  """parse_errors should always be in aggregate_scores."""
+  """parse_errors should always be in report.details (not aggregate_scores)."""
 
-  def test_parse_errors_present_when_errors_exist(self):
+  def test_parse_errors_in_details_when_errors_exist(self):
     report = EvaluationReport(
         dataset="test",
         evaluator_name="judge",
@@ -360,9 +360,11 @@ class TestStrictModeParseErrorsStable:
         ],
     )
     strict = _apply_strict_mode(report)
-    assert strict.aggregate_scores["parse_errors"] == 1.0
+    assert strict.details["parse_errors"] == 1
+    assert strict.details["parse_error_rate"] == 0.5
+    assert "parse_errors" not in strict.aggregate_scores
 
-  def test_parse_errors_present_when_zero(self):
+  def test_parse_errors_in_details_when_zero(self):
     report = EvaluationReport(
         dataset="test",
         evaluator_name="judge",
@@ -379,8 +381,10 @@ class TestStrictModeParseErrorsStable:
         ],
     )
     strict = _apply_strict_mode(report)
-    assert "parse_errors" in strict.aggregate_scores
-    assert strict.aggregate_scores["parse_errors"] == 0.0
+    assert "parse_errors" in strict.details
+    assert strict.details["parse_errors"] == 0
+    assert strict.details["parse_error_rate"] == 0.0
+    assert "parse_errors" not in strict.aggregate_scores
 
 
 # ================================================================== #

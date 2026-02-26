@@ -52,13 +52,13 @@ class DriftReport(BaseModel):
   """Results of drift detection between golden and production data."""
 
   coverage_percentage: float = Field(
-      description="Percentage of golden questions covered by production.",
+      description="Percentage of unique golden questions covered.",
   )
   total_golden: int = Field(
-      description="Total questions in golden dataset.",
+      description="Unique questions in golden dataset.",
   )
   total_production: int = Field(
-      description="Total questions in production dataset.",
+      description="Unique questions in production dataset.",
   )
   covered_questions: list[str] = Field(
       default_factory=list,
@@ -462,11 +462,18 @@ async def compute_drift(
 
   return DriftReport(
       coverage_percentage=coverage,
-      total_golden=len(golden_questions),
-      total_production=len(prod_questions),
+      total_golden=len(golden_keys),
+      total_production=len(prod_keys),
       covered_questions=sorted(golden_by_key[k] for k in covered_keys),
       uncovered_questions=sorted(golden_by_key[k] for k in uncovered_keys),
       new_questions=sorted([prod_by_key[k] for k in new_keys])[:100],
+      details={
+          "method": "keyword_overlap",
+          "raw_golden_count": len(golden_questions),
+          "raw_production_count": len(prod_questions),
+          "unique_golden_count": len(golden_keys),
+          "unique_production_count": len(prod_keys),
+      },
   )
 
 
@@ -560,16 +567,21 @@ async def _semantic_drift(
   new_keys = set(prod_by_key) - set(golden_by_key)
   new_in_prod = sorted([prod_by_key[k] for k in new_keys])[:100]
 
-  total_golden = len(golden_questions)
-  coverage = (len(covered) / total_golden * 100) if total_golden else 0.0
+  # Use deduped golden count so coverage % aligns with total_golden.
+  unique_golden = len(golden_by_key)
+  coverage = (len(covered) / unique_golden * 100) if unique_golden else 0.0
 
   details["similarity_threshold"] = similarity_threshold
   details["method"] = "semantic_embedding"
+  details["raw_golden_count"] = len(golden_questions)
+  details["raw_production_count"] = len(prod_questions)
+  details["unique_golden_count"] = unique_golden
+  details["unique_production_count"] = len(prod_by_key)
 
   return DriftReport(
       coverage_percentage=coverage,
-      total_golden=total_golden,
-      total_production=len(prod_questions),
+      total_golden=unique_golden,
+      total_production=len(prod_by_key),
       covered_questions=sorted(covered),
       uncovered_questions=sorted(uncovered),
       new_questions=new_in_prod,

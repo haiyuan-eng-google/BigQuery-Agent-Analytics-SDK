@@ -2,7 +2,7 @@
 
 **Version:** 0.1.0 (Alpha)
 **Status:** Living document
-**Last Updated:** 2026-02-19
+**Last Updated:** 2026-02-26
 **License:** Apache-2.0
 
 ---
@@ -70,7 +70,7 @@ This SDK bridges the gap between raw telemetry and actionable agent analytics.
                   │  Writes events
                   ▼
 ┌──────────────────────────────────────────────────────────┐
-│              BigQuery (agent_events_v2)                   │
+│              BigQuery (agent_events)                      │
 │                                                          │
 │  Partitioned by DATE(timestamp)                          │
 │  Clustered by event_type, agent, user_id                 │
@@ -197,6 +197,11 @@ As demonstrated in the [e2e demo](../examples/e2e_demo.py):
    │ memory_service   │  │ ai_ml_integration │  │bigframes_evaluator  │
    │ (requires ADK)   │  │                   │  │(requires bigframes) │
    └──────────────────┘  └───────────────────┘  └─────────────────────┘
+
+   ┌──────────────────┐  ┌───────────────────┐
+   │event_semantics   │  │     views         │
+   │(canonical helpers│  │(per-event BQ views│
+   └──────────────────┘  └───────────────────┘
 ```
 
 ### 3.2 Module Categorization
@@ -210,6 +215,7 @@ As demonstrated in the [e2e demo](../examples/e2e_demo.py):
 | **Feedback & Insights** | `feedback.py`, `insights.py` | Drift detection, question distribution, multi-stage analysis pipeline |
 | **AI/ML** | `ai_ml_integration.py`, `bigframes_evaluator.py` | BigQuery AI.GENERATE, embeddings, anomaly detection, DataFrame API |
 | **Memory** | `memory_service.py` | Cross-session context retrieval, semantic search, user profiling |
+| **Utilities** | `event_semantics.py`, `views.py` | Canonical event type predicates, per-event-type BigQuery view management |
 | **Package** | `__init__.py` | Graceful optional import aggregation |
 
 ### 3.3 Key Design Decisions
@@ -240,7 +246,7 @@ The `Client` class is the primary interface for users who want a batteries-inclu
 Client(
     project_id: str,              # GCP project
     dataset_id: str,              # BigQuery dataset
-    table_id: str = "agent_events_v2",
+    table_id: str = "agent_events",
     location: str = "us-central1",
     gcs_bucket_name: str | None,  # For GCS-offloaded payload access
     verify_schema: bool = True,   # Schema validation on init
@@ -840,7 +846,7 @@ Returns `bigframes.DataFrame` that can be displayed directly in Jupyter notebook
 
 ## 5. Data Model
 
-### 5.1 BigQuery Table Schema (`agent_events_v2`)
+### 5.1 BigQuery Table Schema (`agent_events`)
 
 The canonical schema written by the ADK plugin and read by this SDK:
 
@@ -943,8 +949,9 @@ SessionScore
 EvaluationReport
 ├── evaluator_name: str
 ├── session_scores: list[SessionScore]
-├── aggregate_scores: dict[str, float]
-├── pass_rate: float            # computed property
+├── aggregate_scores: dict[str, float]  # normalized metrics only
+├── details: dict[str, Any]             # operational metadata (parse_errors, etc.)
+├── pass_rate: float                    # computed property
 └── summary() -> str
 
 EvaluationResult
