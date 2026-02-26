@@ -273,6 +273,35 @@ report = client.evaluate(
 print(report.summary())
 ```
 
+### Strict Mode
+
+When `strict=True`, sessions where the LLM judge returns empty or unparseable output are marked as **failed** instead of silently passing. Operational counters are placed in `report.details` (not `aggregate_scores`) so downstream consumers can treat scores as purely normalized metrics:
+
+```python
+report = client.evaluate(
+    evaluator=LLMAsJudge.correctness(threshold=0.7),
+    filters=TraceFilter(agent_id="support_bot"),
+    strict=True,
+)
+
+# Normalized scores only — no operational counters mixed in
+print(report.aggregate_scores)
+# {'correctness': 0.73}
+
+# Operational metadata lives in details
+print(report.details)
+# {'parse_errors': 2, 'parse_error_rate': 0.04}
+```
+
+### EvaluationReport.details
+
+The `details` dict on `EvaluationReport` holds operational metadata that is separate from normalized score metrics:
+
+| Key | Type | When Present | Description |
+|-----|------|-------------|-------------|
+| `parse_errors` | `int` | strict mode | Count of sessions with empty/unparseable LLM output |
+| `parse_error_rate` | `float` | strict mode | `parse_errors / total_sessions` |
+
 ---
 
 ## 5. Trajectory Matching & Trace-Based Evaluation
@@ -296,6 +325,10 @@ from bigquery_agent_analytics.trace_evaluator import MatchType
 evaluator = BigQueryTraceEvaluator(
     project_id="my-project",
     dataset_id="agent_analytics",
+    # Optional: filter which event types are fetched from BigQuery.
+    # Defaults to all standard ADK event types (USER_MESSAGE_RECEIVED,
+    # TOOL_STARTING, TOOL_COMPLETED, LLM_REQUEST, LLM_RESPONSE, etc.).
+    include_event_types=["TOOL_STARTING", "TOOL_COMPLETED"],
 )
 
 result = await evaluator.evaluate_session(
@@ -746,14 +779,26 @@ drift_report = client.drift_detection(
 )
 
 print(drift_report.summary())
-# Drift Report:
+# Drift Detection Report
 #   Coverage: 72.3%
-#   Golden questions: 150
-#   Production questions: 2,340
+#   Golden questions: 150        (unique, deduplicated)
+#   Production questions: 2,340  (unique, deduplicated)
 #   Covered: 108
 #   Uncovered: 42
-#   New questions (not in golden): 1,890
+#   New in production: 1,890
+
+# Transparency: raw vs unique counts are in details
+print(drift_report.details)
+# {'method': 'keyword_overlap',
+#  'raw_golden_count': 165,      # before dedup
+#  'unique_golden_count': 150,   # after dedup
+#  'raw_production_count': 2500,
+#  'unique_production_count': 2340}
 ```
+
+> **Note:** `total_golden`, `total_production`, and `coverage_percentage` all use
+> deduplicated (case-insensitive, stripped) question counts so the numbers are
+> internally consistent. Raw row counts are available in `details` for transparency.
 
 ### Question Distribution (Deep Analysis)
 
@@ -1102,6 +1147,66 @@ print(facets_df.columns.tolist())
 
 ---
 
+## 15. Event Semantics
+
+The `event_semantics` module centralizes the logic for interpreting ADK plugin events so that every module uses consistent definitions. Import helpers instead of re-implementing event-type checks.
+
+```python
+from bigquery_agent_analytics import (
+    is_error_event,
+    extract_response_text,
+    is_tool_event,
+    tool_outcome,
+    is_hitl_event,
+    ERROR_SQL_PREDICATE,
+    RESPONSE_EVENT_TYPES,
+    EVENT_FAMILIES,
+    ALL_KNOWN_EVENT_TYPES,
+)
+
+# Check if a span represents an error
+for span in trace.spans:
+    if is_error_event(span.event_type, span.error_message, span.status):
+        print(f"Error: {span.error_message}")
+
+# Extract final response text from a span
+text = extract_response_text(span.content, span.event_type)
+
+# Reuse the canonical SQL predicate for error detection
+query = f"SELECT * FROM events WHERE {ERROR_SQL_PREDICATE}"
+
+# Enumerate all known event types
+print(ALL_KNOWN_EVENT_TYPES)
+# ['USER_MESSAGE_RECEIVED', 'AGENT_STARTING', 'LLM_REQUEST', ...]
+```
+
+---
+
+## 16. BigQuery View Management
+
+`ViewManager` creates per-event-type BigQuery views that unnest the generic `agent_events` table into typed columns. Each view retains standard identity headers (`timestamp`, `agent`, `session_id`, etc.).
+
+```python
+from bigquery_agent_analytics import ViewManager
+
+vm = ViewManager(
+    project_id="my-project",
+    dataset_id="analytics",
+    table_id="agent_events",
+)
+
+# Create all per-event-type views at once
+vm.create_all_views()
+
+# Or create a single view
+vm.create_view("LLM_REQUEST")
+
+# Inspect the SQL without creating the view
+print(vm.get_view_sql("TOOL_COMPLETED"))
+```
+
+---
+
 ## Module Architecture
 
 ```
@@ -1127,6 +1232,10 @@ bigquery_agent_analytics/
 │   ├── ai_ml_integration.py   ← AI.GENERATE, embeddings, anomaly detection
 │   ├── memory_service.py      ← Long-horizon agent memory (requires google-adk)
 │   └── bigframes_evaluator.py ← BigFrames DataFrame evaluator (optional)
+│
+│   Utilities
+│   ├── event_semantics.py     ← Canonical event type helpers & predicates
+│   └── views.py               ← Per-event-type BigQuery view management
 ```
 
 ### Dependency Graph
@@ -1139,6 +1248,8 @@ Standalone modules (no internal imports):
 ├── feedback.py
 ├── ai_ml_integration.py
 ├── bigframes_evaluator.py
+├── event_semantics.py
+├── views.py
 └── eval_suite.py
 
 Modules with internal imports:

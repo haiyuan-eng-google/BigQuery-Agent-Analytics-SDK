@@ -144,7 +144,9 @@ bigquery_agent_analytics/
 ├── insights.py              # Multi-stage insights pipeline
 ├── memory_service.py        # Long-horizon agent memory
 ├── ai_ml_integration.py     # BigQuery AI/ML capabilities
-└── bigframes_evaluator.py   # BigFrames DataFrame evaluator
+├── bigframes_evaluator.py   # BigFrames DataFrame evaluator
+├── event_semantics.py       # Canonical event type helpers & predicates
+└── views.py                 # Per-event-type BigQuery view management
 ```
 
 ## Development
