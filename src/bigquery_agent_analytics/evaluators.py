@@ -41,9 +41,7 @@ from datetime import datetime
 from datetime import timezone
 import json
 import logging
-from typing import Any
-from typing import Callable
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from pydantic import BaseModel
 from pydantic import Field
@@ -522,9 +520,8 @@ class LLMAsJudge:
     )
 
     try:
-      from google.genai import types
-
       from google import genai
+      from google.genai import types
 
       client = genai.Client()
       response = await client.aio.models.generate_content(
@@ -662,7 +659,11 @@ SELECT
   COUNTIF(
     event_type = 'USER_MESSAGE_RECEIVED'
   ) AS turn_count,
-  COUNTIF(status = 'ERROR') > 0 AS has_error,
+  COUNTIF(
+    ENDS_WITH(event_type, '_ERROR')
+    OR error_message IS NOT NULL
+    OR status = 'ERROR'
+  ) > 0 AS has_error,
   SUM(COALESCE(
     CAST(JSON_EXTRACT_SCALAR(
       attributes, '$.usage_metadata.prompt_token_count'

@@ -20,6 +20,8 @@ from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import pytest
+
 from bigquery_agent_analytics.trace_evaluator import BigQueryTraceEvaluator
 from bigquery_agent_analytics.trace_evaluator import EvalStatus
 from bigquery_agent_analytics.trace_evaluator import MatchType
@@ -29,7 +31,6 @@ from bigquery_agent_analytics.trace_evaluator import ToolCall
 from bigquery_agent_analytics.trace_evaluator import TraceEvent
 from bigquery_agent_analytics.trace_evaluator import TraceReplayRunner
 from bigquery_agent_analytics.trace_evaluator import TrajectoryMetrics
-import pytest
 
 
 class TestTraceEvent:

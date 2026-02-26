@@ -59,32 +59,35 @@ try:
   from .insights import InsightsReport
   from .insights import SessionFacet
   from .trace import ContentPart
+  from .trace import EventType
   from .trace import ObjectRef
   from .trace import Span
   from .trace import Trace
   from .trace import TraceFilter
-
   from .views import ViewManager
 
-  __all__.extend([
-      "Client",
-      "Trace",
-      "Span",
-      "ContentPart",
-      "ObjectRef",
-      "TraceFilter",
-      "ViewManager",
-      "CodeEvaluator",
-      "LLMAsJudge",
-      "EvaluationReport",
-      "SessionScore",
-      "DriftReport",
-      "QuestionDistribution",
-      "AnalysisConfig",
-      "InsightsReport",
-      "InsightsConfig",
-      "SessionFacet",
-  ])
+  __all__.extend(
+      [
+          "Client",
+          "Trace",
+          "Span",
+          "ContentPart",
+          "EventType",
+          "ObjectRef",
+          "TraceFilter",
+          "ViewManager",
+          "CodeEvaluator",
+          "LLMAsJudge",
+          "EvaluationReport",
+          "SessionScore",
+          "DriftReport",
+          "QuestionDistribution",
+          "AnalysisConfig",
+          "InsightsReport",
+          "InsightsConfig",
+          "SessionFacet",
+      ]
+  )
 except ImportError as e:
   logger.debug(
       "Could not import SDK client components: %s. "
@@ -99,12 +102,14 @@ try:
   from .trace_evaluator import TraceReplayRunner
   from .trace_evaluator import TrajectoryMetrics
 
-  __all__.extend([
-      "BigQueryTraceEvaluator",
-      "EvaluationResult",
-      "TraceReplayRunner",
-      "TrajectoryMetrics",
-  ])
+  __all__.extend(
+      [
+          "BigQueryTraceEvaluator",
+          "EvaluationResult",
+          "TraceReplayRunner",
+          "TrajectoryMetrics",
+      ]
+  )
 except ImportError as e:
   logger.debug(
       "Could not import trace evaluator components: %s. "
@@ -120,13 +125,15 @@ try:
   from .memory_service import Episode
   from .memory_service import UserProfileBuilder
 
-  __all__.extend([
-      "BigQueryMemoryService",
-      "BigQuerySessionMemory",
-      "ContextManager",
-      "Episode",
-      "UserProfileBuilder",
-  ])
+  __all__.extend(
+      [
+          "BigQueryMemoryService",
+          "BigQuerySessionMemory",
+          "ContextManager",
+          "Episode",
+          "UserProfileBuilder",
+      ]
+  )
 except ImportError as e:
   logger.debug(
       "Could not import memory service components: %s. "
@@ -141,12 +148,14 @@ try:
   from .ai_ml_integration import BigQueryAIClient
   from .ai_ml_integration import EmbeddingSearchClient
 
-  __all__.extend([
-      "BigQueryAIClient",
-      "EmbeddingSearchClient",
-      "AnomalyDetector",
-      "BatchEvaluator",
-  ])
+  __all__.extend(
+      [
+          "BigQueryAIClient",
+          "EmbeddingSearchClient",
+          "AnomalyDetector",
+          "BatchEvaluator",
+      ]
+  )
 except ImportError as e:
   logger.debug(
       "Could not import AI/ML integration components: %s. "
@@ -160,11 +169,13 @@ try:
   from .multi_trial import TrialResult
   from .multi_trial import TrialRunner
 
-  __all__.extend([
-      "TrialRunner",
-      "TrialResult",
-      "MultiTrialReport",
-  ])
+  __all__.extend(
+      [
+          "TrialRunner",
+          "TrialResult",
+          "MultiTrialReport",
+      ]
+  )
 except ImportError as e:
   logger.debug(
       "Could not import multi-trial components: %s. "
@@ -182,15 +193,17 @@ try:
   from .grader_pipeline import ScoringStrategy
   from .grader_pipeline import WeightedStrategy
 
-  __all__.extend([
-      "AggregateVerdict",
-      "BinaryStrategy",
-      "GraderPipeline",
-      "GraderResult",
-      "MajorityStrategy",
-      "ScoringStrategy",
-      "WeightedStrategy",
-  ])
+  __all__.extend(
+      [
+          "AggregateVerdict",
+          "BinaryStrategy",
+          "GraderPipeline",
+          "GraderResult",
+          "MajorityStrategy",
+          "ScoringStrategy",
+          "WeightedStrategy",
+      ]
+  )
 except ImportError as e:
   logger.debug(
       "Could not import grader pipeline components: %s. "
@@ -205,12 +218,14 @@ try:
   from .eval_suite import EvalTaskDef
   from .eval_suite import SuiteHealth
 
-  __all__.extend([
-      "EvalCategory",
-      "EvalSuite",
-      "EvalTaskDef",
-      "SuiteHealth",
-  ])
+  __all__.extend(
+      [
+          "EvalCategory",
+          "EvalSuite",
+          "EvalTaskDef",
+          "SuiteHealth",
+      ]
+  )
 except ImportError as e:
   logger.debug(
       "Could not import eval suite components: %s. "
@@ -223,10 +238,12 @@ try:
   from .eval_validator import EvalValidator
   from .eval_validator import ValidationWarning
 
-  __all__.extend([
-      "EvalValidator",
-      "ValidationWarning",
-  ])
+  __all__.extend(
+      [
+          "EvalValidator",
+          "ValidationWarning",
+      ]
+  )
 except ImportError as e:
   logger.debug(
       "Could not import eval validator components: %s. "

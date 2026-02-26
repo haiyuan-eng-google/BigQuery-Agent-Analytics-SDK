@@ -48,9 +48,7 @@ from datetime import datetime
 from enum import Enum
 import json
 import logging
-from typing import Any
-from typing import Callable
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from google.cloud import bigquery
 from pydantic import BaseModel
@@ -426,7 +424,11 @@ class BigQueryTraceEvaluator:
       'AGENT_STARTING', 'AGENT_COMPLETED',
       'TOOL_STARTING', 'TOOL_COMPLETED', 'TOOL_ERROR',
       'LLM_REQUEST', 'LLM_RESPONSE', 'LLM_ERROR',
-      'INVOCATION_STARTING', 'INVOCATION_COMPLETED'
+      'INVOCATION_STARTING', 'INVOCATION_COMPLETED',
+      'STATE_DELTA',
+      'HITL_CONFIRMATION_REQUEST', 'HITL_CONFIRMATION_REQUEST_COMPLETED',
+      'HITL_CREDENTIAL_REQUEST', 'HITL_CREDENTIAL_REQUEST_COMPLETED',
+      'HITL_INPUT_REQUEST', 'HITL_INPUT_REQUEST_COMPLETED'
     )
   ORDER BY timestamp ASC
   """
@@ -746,9 +748,8 @@ Required JSON format:
         Tuple of (scores dict, feedback string).
     """
     try:
-      from google.genai import types
-
       from google import genai
+      from google.genai import types
     except ImportError:
       logger.warning("google-genai not installed, skipping LLM judge.")
       return {}, "LLM judge unavailable - google-genai not installed"
@@ -1006,17 +1007,21 @@ class TraceReplayRunner:
       tc2 = trace2.tool_calls[i] if i < len(trace2.tool_calls) else None
 
       if tc1 is None or tc2 is None:
-        differences["tool_differences"].append({
-            "index": i,
-            "trace1": tc1.tool_name if tc1 else None,
-            "trace2": tc2.tool_name if tc2 else None,
-        })
+        differences["tool_differences"].append(
+            {
+                "index": i,
+                "trace1": tc1.tool_name if tc1 else None,
+                "trace2": tc2.tool_name if tc2 else None,
+            }
+        )
       elif tc1.tool_name != tc2.tool_name or tc1.args != tc2.args:
-        differences["tool_differences"].append({
-            "index": i,
-            "trace1": {"name": tc1.tool_name, "args": tc1.args},
-            "trace2": {"name": tc2.tool_name, "args": tc2.args},
-        })
+        differences["tool_differences"].append(
+            {
+                "index": i,
+                "trace1": {"name": tc1.tool_name, "args": tc1.args},
+                "trace2": {"name": tc2.tool_name, "args": tc2.args},
+            }
+        )
 
     # Compare responses
     if trace1.final_response and trace2.final_response:

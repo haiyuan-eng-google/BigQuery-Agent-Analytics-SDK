@@ -14,12 +14,13 @@
 
 """Tests for the eval_validator module."""
 
+import pytest
+
 from bigquery_agent_analytics.eval_suite import EvalCategory
 from bigquery_agent_analytics.eval_suite import EvalSuite
 from bigquery_agent_analytics.eval_suite import EvalTaskDef
 from bigquery_agent_analytics.eval_validator import EvalValidator
 from bigquery_agent_analytics.eval_validator import ValidationWarning
-import pytest
 
 
 def _make_task(

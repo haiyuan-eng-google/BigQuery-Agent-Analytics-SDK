@@ -18,6 +18,8 @@ from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import pytest
+
 from bigquery_agent_analytics.evaluators import _parse_json_from_text
 from bigquery_agent_analytics.evaluators import AI_GENERATE_JUDGE_BATCH_QUERY
 from bigquery_agent_analytics.evaluators import CodeEvaluator
@@ -27,7 +29,6 @@ from bigquery_agent_analytics.evaluators import LLM_JUDGE_BATCH_QUERY
 from bigquery_agent_analytics.evaluators import LLMAsJudge
 from bigquery_agent_analytics.evaluators import SESSION_SUMMARY_QUERY
 from bigquery_agent_analytics.evaluators import SessionScore
-import pytest
 
 
 class TestCodeEvaluator:
@@ -108,72 +109,88 @@ class TestCodeEvaluatorPrebuilt:
 
   def test_latency_pass(self):
     evaluator = CodeEvaluator.latency(threshold_ms=5000)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "avg_latency_ms": 2000,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "avg_latency_ms": 2000,
+        }
+    )
     assert score.passed is True
     assert score.scores["latency"] > 0.5
 
   def test_latency_fail(self):
     evaluator = CodeEvaluator.latency(threshold_ms=1000)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "avg_latency_ms": 2000,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "avg_latency_ms": 2000,
+        }
+    )
     assert score.passed is False
     assert score.scores["latency"] == 0.0
 
   def test_latency_zero(self):
     evaluator = CodeEvaluator.latency(threshold_ms=5000)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "avg_latency_ms": 0,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "avg_latency_ms": 0,
+        }
+    )
     assert score.scores["latency"] == 1.0
 
   def test_turn_count_pass(self):
     evaluator = CodeEvaluator.turn_count(max_turns=10)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "turn_count": 3,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "turn_count": 3,
+        }
+    )
     assert score.passed is True
     assert score.scores["turn_count"] > 0.5
 
   def test_turn_count_fail(self):
     evaluator = CodeEvaluator.turn_count(max_turns=5)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "turn_count": 8,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "turn_count": 8,
+        }
+    )
     assert score.passed is False
 
   def test_error_rate_pass(self):
     evaluator = CodeEvaluator.error_rate(max_error_rate=0.1)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "tool_calls": 20,
-        "tool_errors": 1,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "tool_calls": 20,
+            "tool_errors": 1,
+        }
+    )
     assert score.passed is True
 
   def test_error_rate_fail(self):
     evaluator = CodeEvaluator.error_rate(max_error_rate=0.1)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "tool_calls": 10,
-        "tool_errors": 5,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "tool_calls": 10,
+            "tool_errors": 5,
+        }
+    )
     assert score.passed is False
 
   def test_error_rate_no_calls(self):
     evaluator = CodeEvaluator.error_rate(max_error_rate=0.1)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "tool_calls": 0,
-        "tool_errors": 0,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "tool_calls": 0,
+            "tool_errors": 0,
+        }
+    )
     assert score.scores["error_rate"] == 1.0
 
 
@@ -330,38 +347,46 @@ class TestTokenEfficiencyPrebuilt:
 
   def test_zero_tokens(self):
     evaluator = CodeEvaluator.token_efficiency(max_tokens=50000)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "total_tokens": 0,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "total_tokens": 0,
+        }
+    )
     assert score.scores["token_efficiency"] == 1.0
     assert score.passed is True
 
   def test_under_budget(self):
     evaluator = CodeEvaluator.token_efficiency(max_tokens=50000)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "total_tokens": 10000,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "total_tokens": 10000,
+        }
+    )
     # 1.0 - 10000/50000 = 0.8
     assert score.scores["token_efficiency"] == pytest.approx(0.8)
     assert score.passed is True
 
   def test_over_budget(self):
     evaluator = CodeEvaluator.token_efficiency(max_tokens=50000)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "total_tokens": 60000,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "total_tokens": 60000,
+        }
+    )
     assert score.scores["token_efficiency"] == 0.0
     assert score.passed is False
 
   def test_exactly_at_budget(self):
     evaluator = CodeEvaluator.token_efficiency(max_tokens=50000)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "total_tokens": 50000,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "total_tokens": 50000,
+        }
+    )
     assert score.scores["token_efficiency"] == 0.0
     assert score.passed is False
 
@@ -371,11 +396,13 @@ class TestCostPerSessionPrebuilt:
 
   def test_zero_tokens(self):
     evaluator = CodeEvaluator.cost_per_session(max_cost_usd=1.0)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "input_tokens": 0,
-        "output_tokens": 0,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+    )
     assert score.scores["cost"] == 1.0
     assert score.passed is True
 
@@ -387,11 +414,13 @@ class TestCostPerSessionPrebuilt:
     )
     # Cost = (10000/1000)*0.001 + (5000/1000)*0.002
     #      = 10*0.001 + 5*0.002 = 0.01 + 0.01 = 0.02
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "input_tokens": 10000,
-        "output_tokens": 5000,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "input_tokens": 10000,
+            "output_tokens": 5000,
+        }
+    )
     assert score.scores["cost"] == pytest.approx(0.98)
     assert score.passed is True
 
@@ -402,17 +431,21 @@ class TestCostPerSessionPrebuilt:
         output_cost_per_1k=1.0,
     )
     # Cost = (1000/1000)*1.0 + (1000/1000)*1.0 = 2.0
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-        "input_tokens": 1000,
-        "output_tokens": 1000,
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+            "input_tokens": 1000,
+            "output_tokens": 1000,
+        }
+    )
     assert score.scores["cost"] == 0.0
     assert score.passed is False
 
   def test_missing_tokens_defaults_to_zero(self):
     evaluator = CodeEvaluator.cost_per_session(max_cost_usd=1.0)
-    score = evaluator.evaluate_session({
-        "session_id": "s1",
-    })
+    score = evaluator.evaluate_session(
+        {
+            "session_id": "s1",
+        }
+    )
     assert score.scores["cost"] == 1.0

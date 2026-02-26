@@ -21,7 +21,7 @@ Example usage::
 
     client = Client(project_id="p", dataset_id="d")
     report = client.drift_detection(
-        dataset="agent_events_v2",
+        dataset="agent_events",
         filters=TraceFilter(start_time=...),
         golden_dataset="golden_questions_v1",
     )
@@ -35,8 +35,7 @@ from dataclasses import dataclass
 from dataclasses import field
 import json
 import logging
-from typing import Any
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
 from pydantic import Field
@@ -253,7 +252,11 @@ WITH user_msgs AS (
 errors AS (
   SELECT DISTINCT session_id
   FROM `{project}.{dataset}.{table}`
-  WHERE status = 'ERROR'
+  WHERE (
+    ENDS_WITH(event_type, '_ERROR')
+    OR error_message IS NOT NULL
+    OR status = 'ERROR'
+  )
     AND {where}
 )
 SELECT

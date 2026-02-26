@@ -46,8 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
-from typing import Optional
+from typing import Any, Optional
 
 from google.cloud import bigquery
 
@@ -278,9 +277,6 @@ class Client:
 
   def get_trace(self, trace_id: str) -> Trace:
     """Fetches all spans for a specific trace.
-
-    Automatically resolves GCS-offloaded payloads if
-    ``gcs_bucket_name`` was provided during initialization.
 
     Args:
         trace_id: The trace ID to retrieve.

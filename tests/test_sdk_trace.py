@@ -17,12 +17,13 @@
 from datetime import datetime
 from datetime import timezone
 
+import pytest
+
 from bigquery_agent_analytics.trace import ContentPart
 from bigquery_agent_analytics.trace import ObjectRef
 from bigquery_agent_analytics.trace import Span
 from bigquery_agent_analytics.trace import Trace
 from bigquery_agent_analytics.trace import TraceFilter
-import pytest
 
 
 class TestSpan:
@@ -85,12 +86,14 @@ class TestSpan:
         "timestamp": datetime.now(timezone.utc),
         "content": "{}",
         "attributes": "{}",
-        "content_parts": [{
-            "mime_type": "image/png",
-            "uri": "gs://bucket/img.png",
-            "text": None,
-            "storage_mode": "GCS_REFERENCE",
-        }],
+        "content_parts": [
+            {
+                "mime_type": "image/png",
+                "uri": "gs://bucket/img.png",
+                "text": None,
+                "storage_mode": "GCS_REFERENCE",
+            }
+        ],
         "status": "OK",
     }
     span = Span.from_bigquery_row(row)
@@ -170,20 +173,22 @@ class TestSpan:
         "timestamp": datetime.now(timezone.utc),
         "content": "{}",
         "attributes": "{}",
-        "content_parts": [{
-            "mime_type": "image/png",
-            "uri": None,
-            "text": None,
-            "storage_mode": "GCS_REFERENCE",
-            "object_ref": {
-                "uri": "gs://bucket/ref.png",
-                "version": "v1",
-                "authorizer": "sa@proj.iam",
-                "details": None,
-            },
-            "part_index": 0,
-            "part_attributes": '{"source": "camera"}',
-        }],
+        "content_parts": [
+            {
+                "mime_type": "image/png",
+                "uri": None,
+                "text": None,
+                "storage_mode": "GCS_REFERENCE",
+                "object_ref": {
+                    "uri": "gs://bucket/ref.png",
+                    "version": "v1",
+                    "authorizer": "sa@proj.iam",
+                    "details": None,
+                },
+                "part_index": 0,
+                "part_attributes": '{"source": "camera"}',
+            }
+        ],
         "status": "OK",
     }
     span = Span.from_bigquery_row(row)
@@ -555,9 +560,15 @@ class TestTraceErrors:
         spans=spans,
     )
 
-  def _make_span(self, span_id, parent=None, status="OK",
-                 error_message=None, event_type="AGENT_COMPLETED",
-                 content=None):
+  def _make_span(
+      self,
+      span_id,
+      parent=None,
+      status="OK",
+      error_message=None,
+      event_type="AGENT_COMPLETED",
+      content=None,
+  ):
     return Span(
         event_type=event_type,
         agent="agent",
@@ -573,7 +584,9 @@ class TestTraceErrors:
     spans = [
         self._make_span("s1", status="OK"),
         self._make_span(
-            "s2", status="ERROR", error_message="fail",
+            "s2",
+            status="ERROR",
+            error_message="fail",
             event_type="TOOL_ERROR",
             content={"tool": "my_tool"},
         ),
@@ -591,11 +604,14 @@ class TestTraceErrors:
     assert trace.errors() == []
 
   def test_render_shows_warning_for_parent_of_error(self):
-    parent = self._make_span("p1", status="OK",
-                             event_type="AGENT_STARTING")
-    child = self._make_span("c1", parent="p1", status="ERROR",
-                            error_message="broken",
-                            event_type="TOOL_ERROR")
+    parent = self._make_span("p1", status="OK", event_type="AGENT_STARTING")
+    child = self._make_span(
+        "c1",
+        parent="p1",
+        status="ERROR",
+        error_message="broken",
+        event_type="TOOL_ERROR",
+    )
     trace = self._make_trace([parent, child])
     output = trace.render()
     # Parent should show warning icon (U+26A0)
@@ -604,10 +620,10 @@ class TestTraceErrors:
     assert "\u2717" in output
 
   def test_render_no_warning_when_all_ok(self):
-    parent = self._make_span("p1", status="OK",
-                             event_type="AGENT_STARTING")
-    child = self._make_span("c1", parent="p1", status="OK",
-                            event_type="TOOL_COMPLETED")
+    parent = self._make_span("p1", status="OK", event_type="AGENT_STARTING")
+    child = self._make_span(
+        "c1", parent="p1", status="OK", event_type="TOOL_COMPLETED"
+    )
     trace = self._make_trace([parent, child])
     output = trace.render()
     assert "\u26a0" not in output
@@ -619,16 +635,16 @@ class TestEventTypeEnum:
 
   def test_state_delta_exists(self):
     from bigquery_agent_analytics.trace import EventType
+
     assert EventType.STATE_DELTA.value == "STATE_DELTA"
 
   def test_hitl_events_exist(self):
     from bigquery_agent_analytics.trace import EventType
+
     assert EventType.HITL_CONFIRMATION_REQUEST.value == (
         "HITL_CONFIRMATION_REQUEST"
     )
     assert EventType.HITL_CREDENTIAL_REQUEST.value == (
         "HITL_CREDENTIAL_REQUEST"
     )
-    assert EventType.HITL_INPUT_REQUEST.value == (
-        "HITL_INPUT_REQUEST"
-    )
+    assert EventType.HITL_INPUT_REQUEST.value == ("HITL_INPUT_REQUEST")

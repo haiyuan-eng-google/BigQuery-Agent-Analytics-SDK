@@ -170,6 +170,16 @@ class BigFramesEvaluator:
     import bigframes.pandas as bpd
 
     if session_ids:
+      import re
+
+      _SESSION_ID_RE = re.compile(r"^[\w\-\.]+$")
+      for sid in session_ids:
+        if not _SESSION_ID_RE.match(sid):
+          raise ValueError(
+              f"Invalid session_id: {sid!r}. "
+              "Only alphanumerics, hyphens, underscores, "
+              "and dots are allowed."
+          )
       ids_str = ", ".join(f"'{s}'" for s in session_ids)
       where = f"session_id IN ({ids_str})"
     else:

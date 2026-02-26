@@ -21,6 +21,8 @@ from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import pytest
+
 from bigquery_agent_analytics.memory_service import BigQueryEpisodicMemory
 from bigquery_agent_analytics.memory_service import BigQueryMemoryService
 from bigquery_agent_analytics.memory_service import BigQuerySessionMemory
@@ -28,7 +30,6 @@ from bigquery_agent_analytics.memory_service import ContextManager
 from bigquery_agent_analytics.memory_service import Episode
 from bigquery_agent_analytics.memory_service import UserProfile
 from bigquery_agent_analytics.memory_service import UserProfileBuilder
-import pytest
 
 
 class TestEpisode:
@@ -345,11 +346,13 @@ class TestUserProfileBuilder:
   async def test_build_profile_basic(self, profile_builder, mock_client):
     """Test building basic user profile."""
     # Mock stats query
-    stats_results = [{
-        "session_count": 25,
-        "last_interaction": datetime.now(timezone.utc),
-        "tools_used": ["search", "format", "send"],
-    }]
+    stats_results = [
+        {
+            "session_count": 25,
+            "last_interaction": datetime.now(timezone.utc),
+            "tools_used": ["search", "format", "send"],
+        }
+    ]
 
     # Mock messages query
     messages_results = [
@@ -396,13 +399,15 @@ class TestBigQueryMemoryService:
   async def test_search_memory(self, memory_service, mock_client):
     """Test searching memory."""
     # Mock episodic memory results
-    mock_results = [{
-        "session_id": "sess-1",
-        "content": '{"text_summary": "weather forecast"}',
-        "timestamp": datetime.now(timezone.utc),
-        "user_id": "user-123",
-        "event_type": "USER_MESSAGE_RECEIVED",
-    }]
+    mock_results = [
+        {
+            "session_id": "sess-1",
+            "content": '{"text_summary": "weather forecast"}',
+            "timestamp": datetime.now(timezone.utc),
+            "user_id": "user-123",
+            "event_type": "USER_MESSAGE_RECEIVED",
+        }
+    ]
 
     mock_query_job = MagicMock()
     mock_query_job.result.return_value = mock_results
@@ -436,14 +441,16 @@ class TestBigQueryMemoryService:
   @pytest.mark.asyncio
   async def test_get_session_context(self, memory_service, mock_client):
     """Test getting session context."""
-    mock_results = [{
-        "session_id": "sess-old",
-        "event_type": "USER_MESSAGE_RECEIVED",
-        "timestamp": datetime.now(timezone.utc),
-        "content_summary": "Previous message",
-        "response": None,
-        "agent": "agent",
-    }]
+    mock_results = [
+        {
+            "session_id": "sess-old",
+            "event_type": "USER_MESSAGE_RECEIVED",
+            "timestamp": datetime.now(timezone.utc),
+            "content_summary": "Previous message",
+            "response": None,
+            "agent": "agent",
+        }
+    ]
 
     mock_query_job = MagicMock()
     mock_query_job.result.return_value = mock_results

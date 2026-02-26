@@ -14,11 +14,12 @@
 
 """Tests for the eval_suite module."""
 
+import pytest
+
 from bigquery_agent_analytics.eval_suite import EvalCategory
 from bigquery_agent_analytics.eval_suite import EvalSuite
 from bigquery_agent_analytics.eval_suite import EvalTaskDef
 from bigquery_agent_analytics.eval_suite import SuiteHealth
-import pytest
 
 
 def _make_task(

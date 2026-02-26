@@ -41,8 +41,7 @@ from __future__ import annotations
 from enum import Enum
 import json
 import logging
-from typing import Any
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
 from pydantic import Field

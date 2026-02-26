@@ -18,6 +18,8 @@ from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import pytest
+
 from bigquery_agent_analytics.multi_trial import compute_pass_at_k
 from bigquery_agent_analytics.multi_trial import compute_pass_pow_k
 from bigquery_agent_analytics.multi_trial import MultiTrialReport
@@ -27,7 +29,6 @@ from bigquery_agent_analytics.trace_evaluator import BigQueryTraceEvaluator
 from bigquery_agent_analytics.trace_evaluator import EvalStatus
 from bigquery_agent_analytics.trace_evaluator import EvaluationResult
 from bigquery_agent_analytics.trace_evaluator import MatchType
-import pytest
 
 # ------------------------------------------------------------------ #
 # Tests for compute_pass_at_k                                          #

@@ -285,9 +285,7 @@ class ViewManager:
   @property
   def bq_client(self) -> bigquery.Client:
     if self._bq_client is None:
-      self._bq_client = bigquery.Client(
-          project=self.project_id
-      )
+      self._bq_client = bigquery.Client(project=self.project_id)
     return self._bq_client
 
   @property
@@ -336,8 +334,9 @@ class ViewManager:
     """
     sql = self.get_view_sql(event_type)
     view_name = self.get_view_name(event_type)
-    logger.info("Creating view %s.%s.%s",
-                self.project_id, self.dataset_id, view_name)
+    logger.info(
+        "Creating view %s.%s.%s", self.project_id, self.dataset_id, view_name
+    )
     self.bq_client.query(sql).result()
     logger.info("View %s created successfully.", view_name)
 
