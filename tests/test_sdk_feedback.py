@@ -14,12 +14,13 @@
 
 """Tests for the SDK feedback module."""
 
+import pytest
+
 from bigquery_agent_analytics.feedback import _AI_GENERATE_SEMANTIC_GROUPING_QUERY
 from bigquery_agent_analytics.feedback import AnalysisConfig
 from bigquery_agent_analytics.feedback import DriftReport
 from bigquery_agent_analytics.feedback import QuestionCategory
 from bigquery_agent_analytics.feedback import QuestionDistribution
-import pytest
 
 
 class TestDriftReport:

@@ -21,7 +21,7 @@ Example usage::
 
     client = Client(project_id="p", dataset_id="d")
     report = client.drift_detection(
-        dataset="agent_events_v2",
+        dataset="agent_events",
         filters=TraceFilter(start_time=...),
         golden_dataset="golden_questions_v1",
     )

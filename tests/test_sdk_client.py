@@ -19,11 +19,12 @@ from datetime import timezone
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import pytest
+
 from bigquery_agent_analytics.client import Client
 from bigquery_agent_analytics.evaluators import CodeEvaluator
 from bigquery_agent_analytics.evaluators import EvaluationReport
 from bigquery_agent_analytics.trace import TraceFilter
-import pytest
 
 
 def _mock_bq_client():
@@ -127,22 +128,30 @@ class TestClientInit:
     mock_bq = _mock_bq_client()
     # Mock schema query result
     mock_rows = [
-        _make_mock_row({
-            "column_name": "timestamp",
-            "data_type": "TIMESTAMP",
-        }),
-        _make_mock_row({
-            "column_name": "event_type",
-            "data_type": "STRING",
-        }),
-        _make_mock_row({
-            "column_name": "session_id",
-            "data_type": "STRING",
-        }),
-        _make_mock_row({
-            "column_name": "content",
-            "data_type": "JSON",
-        }),
+        _make_mock_row(
+            {
+                "column_name": "timestamp",
+                "data_type": "TIMESTAMP",
+            }
+        ),
+        _make_mock_row(
+            {
+                "column_name": "event_type",
+                "data_type": "STRING",
+            }
+        ),
+        _make_mock_row(
+            {
+                "column_name": "session_id",
+                "data_type": "STRING",
+            }
+        ),
+        _make_mock_row(
+            {
+                "column_name": "content",
+                "data_type": "JSON",
+            }
+        ),
     ]
     mock_job = MagicMock()
     mock_job.result.return_value = mock_rows
@@ -248,30 +257,34 @@ class TestClientEvaluate:
     mock_bq = _mock_bq_client()
     # Mock session summary results
     summary_rows = [
-        _make_mock_row({
-            "session_id": "s1",
-            "total_events": 10,
-            "tool_calls": 3,
-            "tool_errors": 0,
-            "llm_calls": 2,
-            "avg_latency_ms": 1500.0,
-            "max_latency_ms": 3000.0,
-            "total_latency_ms": 5000.0,
-            "turn_count": 2,
-            "has_error": False,
-        }),
-        _make_mock_row({
-            "session_id": "s2",
-            "total_events": 20,
-            "tool_calls": 5,
-            "tool_errors": 3,
-            "llm_calls": 4,
-            "avg_latency_ms": 8000.0,
-            "max_latency_ms": 15000.0,
-            "total_latency_ms": 40000.0,
-            "turn_count": 6,
-            "has_error": True,
-        }),
+        _make_mock_row(
+            {
+                "session_id": "s1",
+                "total_events": 10,
+                "tool_calls": 3,
+                "tool_errors": 0,
+                "llm_calls": 2,
+                "avg_latency_ms": 1500.0,
+                "max_latency_ms": 3000.0,
+                "total_latency_ms": 5000.0,
+                "turn_count": 2,
+                "has_error": False,
+            }
+        ),
+        _make_mock_row(
+            {
+                "session_id": "s2",
+                "total_events": 20,
+                "tool_calls": 5,
+                "tool_errors": 3,
+                "llm_calls": 4,
+                "avg_latency_ms": 8000.0,
+                "max_latency_ms": 15000.0,
+                "total_latency_ms": 40000.0,
+                "turn_count": 6,
+                "has_error": True,
+            }
+        ),
     ]
     mock_job = MagicMock()
     mock_job.result.return_value = summary_rows
@@ -377,20 +390,24 @@ class TestAIGenerateJudge:
   def test_ai_generate_judge_typed_columns(self):
     mock_bq = _mock_bq_client()
     mock_rows = [
-        _make_mock_row({
-            "session_id": "s1",
-            "trace_text": "USER: hi",
-            "final_response": "hello",
-            "score": 8,
-            "justification": "Good response",
-        }),
-        _make_mock_row({
-            "session_id": "s2",
-            "trace_text": "USER: bye",
-            "final_response": "goodbye",
-            "score": 3,
-            "justification": "Incomplete",
-        }),
+        _make_mock_row(
+            {
+                "session_id": "s1",
+                "trace_text": "USER: hi",
+                "final_response": "hello",
+                "score": 8,
+                "justification": "Good response",
+            }
+        ),
+        _make_mock_row(
+            {
+                "session_id": "s2",
+                "trace_text": "USER: bye",
+                "final_response": "goodbye",
+                "score": 3,
+                "justification": "Incomplete",
+            }
+        ),
     ]
     mock_job = MagicMock()
     mock_job.result.return_value = mock_rows
@@ -426,13 +443,15 @@ class TestAIGenerateJudge:
     """Verify _evaluate_llm_judge tries AI.GENERATE first."""
     mock_bq = _mock_bq_client()
     mock_rows = [
-        _make_mock_row({
-            "session_id": "s1",
-            "trace_text": "USER: hi",
-            "final_response": "hello",
-            "score": 7,
-            "justification": "OK",
-        }),
+        _make_mock_row(
+            {
+                "session_id": "s1",
+                "trace_text": "USER: hi",
+                "final_response": "hello",
+                "score": 7,
+                "justification": "OK",
+            }
+        ),
     ]
     mock_job = MagicMock()
     mock_job.result.return_value = mock_rows

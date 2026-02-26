@@ -18,6 +18,8 @@ from datetime import datetime
 from datetime import timezone
 from unittest.mock import MagicMock
 
+import pytest
+
 from bigquery_agent_analytics.ai_ml_integration import Anomaly
 from bigquery_agent_analytics.ai_ml_integration import AnomalyDetector
 from bigquery_agent_analytics.ai_ml_integration import AnomalyType
@@ -26,7 +28,6 @@ from bigquery_agent_analytics.ai_ml_integration import BatchEvaluator
 from bigquery_agent_analytics.ai_ml_integration import BigQueryAIClient
 from bigquery_agent_analytics.ai_ml_integration import EmbeddingResult
 from bigquery_agent_analytics.ai_ml_integration import EmbeddingSearchClient
-import pytest
 
 
 class TestEmbeddingResult:

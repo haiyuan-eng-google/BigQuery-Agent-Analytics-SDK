@@ -385,8 +385,13 @@ class EmbeddingSearchClient:
       STRUCT(JSON_EXTRACT_SCALAR(e.content, '$.text_summary') AS content)
     ).ml_generate_embedding_result as embedding
   FROM `{project}.{dataset}.{source_table}` e
-  WHERE e.event_type IN ('USER_MESSAGE_RECEIVED', 'LLM_RESPONSE', 'AGENT_COMPLETED')
-    AND JSON_EXTRACT_SCALAR(e.content, '$.text_summary') IS NOT NULL
+  WHERE e.event_type IN (
+    'USER_MESSAGE_RECEIVED', 'LLM_RESPONSE', 'AGENT_COMPLETED'
+  )
+    AND COALESCE(
+      JSON_EXTRACT_SCALAR(e.content, '$.text_summary'),
+      JSON_EXTRACT_SCALAR(e.content, '$.response')
+    ) IS NOT NULL
     AND e.timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
   """
 

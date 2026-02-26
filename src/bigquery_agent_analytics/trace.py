@@ -183,12 +183,12 @@ class Span:
     )
 
   @property
-  def is_error(self) -> bool:
-    """Returns True if this span represents an error.
+  def has_error(self) -> bool:
+    """Returns True if this span indicates an error.
 
-    Uses the canonical predicate: event type ends with
-    ``_ERROR``, ``error_message`` is set, or ``status`` is
-    ``'ERROR'``.
+    Uses the canonical error detection predicate: the event type
+    ends with ``_ERROR``, the ``error_message`` field is populated,
+    or the ``status`` column is ``'ERROR'``.
     """
     return (
         self.event_type.endswith("_ERROR")
@@ -197,9 +197,19 @@ class Span:
     )
 
   @property
+  def is_error(self) -> bool:
+    """Returns True if this span represents an error.
+
+    Uses the canonical predicate: event type ends with
+    ``_ERROR``, ``error_message`` is set, or ``status`` is
+    ``'ERROR'``.
+    """
+    return self.has_error
+
+  @property
   def subtree_has_error(self) -> bool:
     """Returns True if this span or any descendant has an error."""
-    if self.is_error:
+    if self.has_error:
       return True
     return any(c.subtree_has_error for c in self.children)
 
@@ -395,6 +405,29 @@ class TraceFilter:
               self.max_latency_ms,
           )
       )
+    if self.experiment_id:
+      conditions.append(
+          "JSON_EXTRACT_SCALAR(attributes, '$.experiment_id')"
+          " = @experiment_id"
+      )
+      params.append(
+          bigquery.ScalarQueryParameter(
+              "experiment_id",
+              "STRING",
+              self.experiment_id,
+          )
+      )
+    if self.custom_labels:
+      for i, (key, value) in enumerate(self.custom_labels.items()):
+        param_key = f"label_key_{i}"
+        param_val = f"label_val_{i}"
+        conditions.append(
+            f"JSON_EXTRACT_SCALAR(attributes,"
+            f" CONCAT('$.labels.', @{param_key}))"
+            f" = @{param_val}"
+        )
+        params.append(bigquery.ScalarQueryParameter(param_key, "STRING", key))
+        params.append(bigquery.ScalarQueryParameter(param_val, "STRING", value))
     if self.event_types:
       conditions.append("event_type IN UNNEST(@event_types)")
       params.append(
@@ -613,7 +646,7 @@ class Trace:
 
   @property
   def error_spans(self) -> list[Span]:
-    """Returns all error spans (canonical predicate)."""
+    """Returns all spans that indicate an error."""
     return [s for s in self.spans if s.is_error]
 
   def errors(self) -> list[dict[str, Any]]:

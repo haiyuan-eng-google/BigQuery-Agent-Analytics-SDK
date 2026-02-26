@@ -18,6 +18,8 @@ from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import pytest
+
 from bigquery_agent_analytics.evaluators import CodeEvaluator
 from bigquery_agent_analytics.evaluators import LLMAsJudge
 from bigquery_agent_analytics.evaluators import SessionScore
@@ -27,7 +29,6 @@ from bigquery_agent_analytics.grader_pipeline import GraderPipeline
 from bigquery_agent_analytics.grader_pipeline import GraderResult
 from bigquery_agent_analytics.grader_pipeline import MajorityStrategy
 from bigquery_agent_analytics.grader_pipeline import WeightedStrategy
-import pytest
 
 # ------------------------------------------------------------------ #
 # Tests for WeightedStrategy                                           #

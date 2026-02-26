@@ -18,8 +18,9 @@ import sys
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
-from bigquery_agent_analytics.bigframes_evaluator import BigFramesEvaluator
 import pytest
+
+from bigquery_agent_analytics.bigframes_evaluator import BigFramesEvaluator
 
 
 class TestBigFramesEvaluatorInit:

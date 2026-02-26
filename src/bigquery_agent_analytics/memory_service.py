@@ -154,7 +154,9 @@ class BigQuerySessionMemory:
     e.agent
   FROM `{project}.{dataset}.{table}` e
   JOIN recent_sessions rs ON e.session_id = rs.session_id
-  WHERE e.event_type IN ('USER_MESSAGE_RECEIVED', 'LLM_RESPONSE', 'AGENT_COMPLETED')
+  WHERE e.event_type IN (
+    'USER_MESSAGE_RECEIVED', 'LLM_RESPONSE', 'AGENT_COMPLETED'
+  )
   ORDER BY e.timestamp DESC
   LIMIT @max_events
   """

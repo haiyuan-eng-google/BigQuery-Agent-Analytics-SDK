@@ -20,6 +20,8 @@ from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import pytest
+
 from bigquery_agent_analytics.insights import _AI_GENERATE_ANALYSIS_QUERY
 from bigquery_agent_analytics.insights import _AI_GENERATE_FACET_EXTRACTION_QUERY
 from bigquery_agent_analytics.insights import aggregate_facets
@@ -39,7 +41,6 @@ from bigquery_agent_analytics.insights import SATISFACTION_LEVELS
 from bigquery_agent_analytics.insights import SESSION_TYPES
 from bigquery_agent_analytics.insights import SessionFacet
 from bigquery_agent_analytics.insights import SessionMetadata
-import pytest
 
 
 class TestSessionFacet:

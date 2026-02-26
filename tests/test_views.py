@@ -21,7 +21,6 @@ import pytest
 from bigquery_agent_analytics.views import _EVENT_VIEW_DEFS
 from bigquery_agent_analytics.views import ViewManager
 
-
 PROJECT = "test-project"
 DATASET = "analytics"
 TABLE = "agent_events"
@@ -67,8 +66,11 @@ class TestViewManager:
   def test_get_view_sql_has_standard_headers(self, vm):
     sql = vm.get_view_sql("TOOL_STARTING")
     for header in [
-        "timestamp", "agent", "session_id",
-        "invocation_id", "span_id",
+        "timestamp",
+        "agent",
+        "session_id",
+        "invocation_id",
+        "span_id",
     ]:
       assert header in sql
 

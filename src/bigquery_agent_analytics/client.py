@@ -262,6 +262,7 @@ def _run_sync(coro):
   return asyncio.run(coro)
 
 
+
 # ------------------------------------------------------------------ #
 # Client                                                               #
 # ------------------------------------------------------------------ #
@@ -635,6 +636,7 @@ class Client:
 
     Use :meth:`get_session_trace` to query by ``session_id``
     instead.
+
 
     Args:
         trace_id: The trace ID to retrieve.
@@ -1730,7 +1732,8 @@ def _merge_criterion_reports(
     # Must have at least one score AND all criteria above threshold.
     # Missing criteria default to 0.0 (guaranteed fail).
     passed = bool(scores) and all(
-        scores.get(c.name, 0.0) >= thresholds.get(c.name, 0.5) for c in criteria
+        scores.get(c.name, 0.0) >= thresholds.get(c.name, 0.5)
+        for c in criteria
     )
     session_scores.append(
         SessionScore(

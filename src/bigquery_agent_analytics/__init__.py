@@ -59,6 +59,7 @@ try:
   from .insights import InsightsReport
   from .insights import SessionFacet
   from .trace import ContentPart
+  from .trace import EventType
   from .trace import ObjectRef
   from .trace import Span
   from .trace import Trace
@@ -71,6 +72,7 @@ try:
           "Trace",
           "Span",
           "ContentPart",
+          "EventType",
           "ObjectRef",
           "TraceFilter",
           "ViewManager",
