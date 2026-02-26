@@ -198,7 +198,12 @@ class Span:
 
   @property
   def is_error(self) -> bool:
-    """Returns True if this span has ERROR status."""
+    """Returns True if this span represents an error.
+
+    Uses the canonical predicate: event type ends with
+    ``_ERROR``, ``error_message`` is set, or ``status`` is
+    ``'ERROR'``.
+    """
     return self.has_error
 
   @property
@@ -242,7 +247,7 @@ class Span:
       if model:
         parts.append(f"({model})")
 
-    if self.status == "ERROR":
+    if self.is_error:
       parts.append("ERROR")
 
     return " ".join(parts)
@@ -571,7 +576,7 @@ class Trace:
 
   def _render_flat_span(self, span: Span, lines: list[str]) -> None:
     """Renders a single span without tree structure."""
-    status_icon = "\u2717" if span.status == "ERROR" else "\u2713"
+    status_icon = "\u2717" if span.is_error else "\u2713"
     latency = ""
     if span.latency_ms is not None:
       latency = f" ({span.latency_ms:.0f}ms)"
@@ -642,7 +647,7 @@ class Trace:
   @property
   def error_spans(self) -> list[Span]:
     """Returns all spans that indicate an error."""
-    return [s for s in self.spans if s.has_error]
+    return [s for s in self.spans if s.is_error]
 
   def errors(self) -> list[dict[str, Any]]:
     """Returns error spans with full failure context.

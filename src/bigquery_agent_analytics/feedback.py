@@ -407,6 +407,27 @@ async def compute_drift(
       r.get("question", "") for r in prod_rows if r.get("question")
   ]
 
+  # Use semantic drift if embedding model is provided
+  if embedding_model:
+    try:
+      return await _semantic_drift(
+          bq_client=bq_client,
+          project_id=project_id,
+          dataset_id=dataset_id,
+          table_id=table_id,
+          golden_table=golden_table,
+          where_clause=where_clause,
+          query_params=query_params,
+          embedding_model=embedding_model,
+          golden_questions=golden_questions,
+          prod_questions=prod_questions,
+      )
+    except Exception as e:
+      logger.warning(
+          "Semantic drift failed, falling back to keyword matching: %s",
+          e,
+      )
+
   # Simple keyword overlap matching
   golden_set = set(q.lower().strip() for q in golden_questions)
   prod_set = set(q.lower().strip() for q in prod_questions)
@@ -424,6 +445,111 @@ async def compute_drift(
       covered_questions=sorted(covered),
       uncovered_questions=sorted(uncovered),
       new_questions=sorted(list(new_in_prod)[:100]),
+  )
+
+
+async def _semantic_drift(
+    bq_client: Any,
+    project_id: str,
+    dataset_id: str,
+    table_id: str,
+    golden_table: str,
+    where_clause: str,
+    query_params: list,
+    embedding_model: str,
+    golden_questions: list[str],
+    prod_questions: list[str],
+    similarity_threshold: float = 0.3,
+) -> DriftReport:
+  """Computes semantic drift using ML.GENERATE_EMBEDDING cosine distance.
+
+  Args:
+      bq_client: BigQuery client instance.
+      project_id: GCP project ID.
+      dataset_id: BigQuery dataset.
+      table_id: Events table.
+      golden_table: Golden questions table.
+      where_clause: SQL WHERE clause for filtering.
+      query_params: BigQuery query parameters.
+      embedding_model: BQ ML embedding model reference.
+      golden_questions: Pre-loaded golden questions.
+      prod_questions: Pre-loaded production questions.
+      similarity_threshold: Cosine distance threshold below which a
+          golden question is considered "covered". Default 0.3.
+
+  Returns:
+      DriftReport with semantic coverage metrics.
+  """
+  from google.cloud import bigquery as bq_mod
+
+  loop = asyncio.get_event_loop()
+
+  query = _SEMANTIC_DRIFT_QUERY.format(
+      project=project_id,
+      dataset=dataset_id,
+      table=table_id,
+      golden_table=golden_table,
+      model=embedding_model,
+      where=where_clause,
+  )
+
+  job_config = bq_mod.QueryJobConfig(query_parameters=query_params)
+  job = await loop.run_in_executor(
+      None,
+      lambda: bq_client.query(query, job_config=job_config),
+  )
+  rows = await loop.run_in_executor(
+      None,
+      lambda: list(job.result()),
+  )
+
+  covered: list[str] = []
+  uncovered: list[str] = []
+  details: dict[str, Any] = {"semantic_matches": []}
+
+  seen_golden = set()
+  for row in rows:
+    g_q = row.get("golden_question", "")
+    p_q = row.get("closest_production", "")
+    distance = row.get("distance", 1.0)
+
+    seen_golden.add(g_q)
+    match_info = {
+        "golden": g_q,
+        "closest_production": p_q,
+        "cosine_distance": distance,
+    }
+    details["semantic_matches"].append(match_info)
+
+    if distance <= similarity_threshold:
+      covered.append(g_q)
+    else:
+      uncovered.append(g_q)
+
+  # Any golden questions not in the result set are uncovered
+  for gq in golden_questions:
+    if gq not in seen_golden:
+      uncovered.append(gq)
+
+  # Identify new production questions (no close golden match)
+  golden_set_lower = set(q.lower().strip() for q in golden_questions)
+  prod_set_lower = set(q.lower().strip() for q in prod_questions)
+  new_in_prod = sorted(list(prod_set_lower - golden_set_lower)[:100])
+
+  total_golden = len(golden_questions)
+  coverage = (len(covered) / total_golden * 100) if total_golden else 0.0
+
+  details["similarity_threshold"] = similarity_threshold
+  details["method"] = "semantic_embedding"
+
+  return DriftReport(
+      coverage_percentage=coverage,
+      total_golden=total_golden,
+      total_production=len(prod_questions),
+      covered_questions=sorted(covered),
+      uncovered_questions=sorted(uncovered),
+      new_questions=new_in_prod,
+      details=details,
   )
 
 

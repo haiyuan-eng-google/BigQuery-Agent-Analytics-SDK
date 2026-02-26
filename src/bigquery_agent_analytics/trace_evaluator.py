@@ -211,20 +211,25 @@ class SessionTrace:
     return tool_calls
 
   def extract_final_response(self) -> Optional[str]:
-    """Extracts the final agent response from events."""
+    """Extracts the final agent response from events.
+
+    Checks LLM_RESPONSE first (most reliable response source),
+    then falls back to AGENT_COMPLETED.
+    """
+    # Prefer the last LLM_RESPONSE (most reliable response source)
     for event in reversed(self.events):
-      if event.event_type == "AGENT_COMPLETED":
+      if event.event_type == "LLM_RESPONSE":
         content = event.content
         if isinstance(content, dict):
           return content.get("response") or content.get("text_summary")
         return str(content) if content else None
 
-    # Fallback to last LLM response
+    # Fallback to AGENT_COMPLETED
     for event in reversed(self.events):
-      if event.event_type == "LLM_RESPONSE":
+      if event.event_type == "AGENT_COMPLETED":
         content = event.content
         if isinstance(content, dict):
-          return content.get("response")
+          return content.get("response") or content.get("text_summary")
         return str(content) if content else None
 
     return None
