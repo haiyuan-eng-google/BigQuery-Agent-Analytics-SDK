@@ -234,6 +234,37 @@ except ImportError as e:
       e,
   )
 
+# Event Semantics
+try:
+  from .event_semantics import ALL_KNOWN_EVENT_TYPES
+  from .event_semantics import ERROR_SQL_PREDICATE
+  from .event_semantics import EVENT_FAMILIES
+  from .event_semantics import extract_response_text
+  from .event_semantics import is_error_event
+  from .event_semantics import is_hitl_event
+  from .event_semantics import is_tool_event
+  from .event_semantics import RESPONSE_EVENT_TYPES
+  from .event_semantics import tool_outcome
+
+  __all__.extend(
+      [
+          "is_error_event",
+          "extract_response_text",
+          "is_tool_event",
+          "tool_outcome",
+          "is_hitl_event",
+          "ERROR_SQL_PREDICATE",
+          "RESPONSE_EVENT_TYPES",
+          "EVENT_FAMILIES",
+          "ALL_KNOWN_EVENT_TYPES",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import event semantics: %s.",
+      e,
+  )
+
 # BigFrames Evaluator (optional bigframes dependency)
 try:
   from .bigframes_evaluator import BigFramesEvaluator

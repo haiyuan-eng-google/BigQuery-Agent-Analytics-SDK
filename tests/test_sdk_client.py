@@ -449,7 +449,7 @@ class TestAIGenerateJudge:
     evaluator = LLMAsJudge.correctness()
     report = client._evaluate_llm_judge(
         evaluator,
-        "agent_events_v2",
+        "agent_events",
         "TRUE",
         [],
     )
@@ -459,3 +459,441 @@ class TestAIGenerateJudge:
     call_args = mock_bq.query.call_args
     query_str = call_args[0][0]
     assert "AI.GENERATE" in query_str
+
+
+class TestMultiCriterionJudge:
+  """Tests for multi-criterion LLM judge (Fix #1)."""
+
+  def test_all_criteria_evaluated(self):
+    """Verify all criteria are evaluated, not just the first."""
+    mock_bq = _mock_bq_client()
+    mock_rows = [
+        _make_mock_row(
+            {
+                "session_id": "s1",
+                "trace_text": "USER: hi",
+                "final_response": "hello",
+                "score": 8,
+                "justification": "Good",
+            }
+        ),
+    ]
+    mock_job = MagicMock()
+    mock_job.result.return_value = mock_rows
+    mock_bq.query.return_value = mock_job
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+
+    from bigquery_agent_analytics.evaluators import LLMAsJudge
+
+    # Build evaluator with TWO criteria
+    judge = LLMAsJudge(name="multi_judge")
+    judge.add_criterion(
+        name="correctness",
+        prompt_template="Score correctness.\n{trace_text}\n{final_response}",
+        score_key="correctness",
+        threshold=0.5,
+    )
+    judge.add_criterion(
+        name="helpfulness",
+        prompt_template="Score helpfulness.\n{trace_text}\n{final_response}",
+        score_key="helpfulness",
+        threshold=0.5,
+    )
+
+    report = client._evaluate_llm_judge(
+        judge,
+        "agent_events",
+        "TRUE",
+        [],
+    )
+
+    # AI.GENERATE should be called twice (once per criterion)
+    assert mock_bq.query.call_count == 2
+    # Session should have scores from both criteria
+    assert report.total_sessions == 1
+    ss = report.session_scores[0]
+    assert "correctness" in ss.scores or "helpfulness" in ss.scores
+
+  def test_empty_criteria_returns_empty_report(self):
+    mock_bq = _mock_bq_client()
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    from bigquery_agent_analytics.evaluators import LLMAsJudge
+
+    judge = LLMAsJudge(name="empty")
+    report = client._evaluate_llm_judge(
+        judge,
+        "agent_events",
+        "TRUE",
+        [],
+    )
+    assert report.total_sessions == 0
+
+
+class TestFalsePassFix:
+  """Tests for empty scores false pass fix (Fix #2)."""
+
+  def test_empty_score_fails(self):
+    """Session with no parseable score should NOT pass."""
+    mock_bq = _mock_bq_client()
+    # Return row with score=None (unparseable)
+    mock_rows = [
+        _make_mock_row(
+            {
+                "session_id": "s1",
+                "trace_text": "USER: hi",
+                "final_response": "hello",
+                "score": None,
+                "justification": "",
+            }
+        ),
+    ]
+    mock_job = MagicMock()
+    mock_job.result.return_value = mock_rows
+    mock_bq.query.return_value = mock_job
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+
+    from bigquery_agent_analytics.evaluators import _JudgeCriterion
+    from bigquery_agent_analytics.evaluators import LLMAsJudge
+
+    evaluator = LLMAsJudge.correctness(threshold=0.5)
+    criterion = evaluator._criteria[0]
+
+    report = client._ai_generate_judge(
+        evaluator,
+        criterion,
+        "agent_events",
+        "TRUE",
+        [],
+    )
+    # Empty scores should mean FAILED, not passed
+    assert report.session_scores[0].passed is False
+    assert report.session_scores[0].scores == {}
+
+  def test_valid_score_passes(self):
+    """Session with valid score above threshold should pass."""
+    mock_bq = _mock_bq_client()
+    mock_rows = [
+        _make_mock_row(
+            {
+                "session_id": "s1",
+                "trace_text": "USER: hi",
+                "final_response": "hello",
+                "score": 8,
+                "justification": "Good",
+            }
+        ),
+    ]
+    mock_job = MagicMock()
+    mock_job.result.return_value = mock_rows
+    mock_bq.query.return_value = mock_job
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+
+    from bigquery_agent_analytics.evaluators import LLMAsJudge
+
+    evaluator = LLMAsJudge.correctness(threshold=0.5)
+    criterion = evaluator._criteria[0]
+
+    report = client._ai_generate_judge(
+        evaluator,
+        criterion,
+        "agent_events",
+        "TRUE",
+        [],
+    )
+    assert report.session_scores[0].passed is True
+    assert report.session_scores[0].scores["correctness"] == 0.8
+
+
+class TestApiJudgeUsesTableParams:
+  """Tests for API judge using correct table/filter (Fix #3)."""
+
+  def test_api_judge_uses_table_and_where(self):
+    """_api_judge should query the specified table with WHERE."""
+    mock_bq = _mock_bq_client()
+    # Return empty results (no traces)
+    mock_job = MagicMock()
+    mock_job.result.return_value = []
+    mock_bq.query.return_value = mock_job
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+
+    from bigquery_agent_analytics.evaluators import LLMAsJudge
+
+    evaluator = LLMAsJudge.correctness()
+    report = client._api_judge(
+        evaluator,
+        "custom_table",
+        "agent = 'my_agent'",
+        [],
+    )
+
+    # Verify the query used the custom table
+    call_args = mock_bq.query.call_args
+    query_str = call_args[0][0]
+    assert "custom_table" in query_str
+    assert "my_agent" in query_str
+    assert report.total_sessions == 0
+
+
+class TestStrictMode:
+  """Tests for strict evaluation mode (Feature #3)."""
+
+  def test_strict_mode_marks_empty_as_failed(self):
+    mock_bq = _mock_bq_client()
+    # One good score, one empty score
+    mock_rows = [
+        _make_mock_row(
+            {
+                "session_id": "s1",
+                "trace_text": "USER: hi",
+                "final_response": "hello",
+                "score": 8,
+                "justification": "Good",
+            }
+        ),
+        _make_mock_row(
+            {
+                "session_id": "s2",
+                "trace_text": "USER: bye",
+                "final_response": "goodbye",
+                "score": None,
+                "justification": "",
+            }
+        ),
+    ]
+    mock_job = MagicMock()
+    mock_job.result.return_value = mock_rows
+    mock_bq.query.return_value = mock_job
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+
+    from bigquery_agent_analytics.evaluators import LLMAsJudge
+
+    evaluator = LLMAsJudge.correctness(threshold=0.5)
+    report = client.evaluate(
+        evaluator=evaluator,
+        strict=True,
+    )
+    # s1 should pass, s2 should fail (empty scores)
+    assert report.passed_sessions == 1
+    assert report.failed_sessions == 1
+    # s2 should have parse_error detail
+    s2 = [s for s in report.session_scores if s.session_id == "s2"]
+    assert s2[0].passed is False
+    assert s2[0].details.get("parse_error") is True
+
+
+class TestAutoDetectTable:
+  """Tests for table auto-detection (Feature #1)."""
+
+  def test_auto_detects_agent_events(self):
+    mock_bq = _mock_bq_client()
+    # Mock table exists query
+    mock_rows = [
+        _make_mock_row({"table_name": "agent_events"}),
+    ]
+    mock_job = MagicMock()
+    mock_job.result.return_value = mock_rows
+    mock_bq.query.return_value = mock_job
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        table_id="auto",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    assert client.table_id == "agent_events"
+
+  def test_auto_falls_back_to_v2(self):
+    mock_bq = _mock_bq_client()
+    mock_rows = [
+        _make_mock_row({"table_name": "agent_events_v2"}),
+    ]
+    mock_job = MagicMock()
+    mock_job.result.return_value = mock_rows
+    mock_bq.query.return_value = mock_job
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        table_id="auto",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    assert client.table_id == "agent_events_v2"
+
+  def test_auto_raises_when_no_table(self):
+    mock_bq = _mock_bq_client()
+    mock_job = MagicMock()
+    mock_job.result.return_value = []
+    mock_bq.query.return_value = mock_job
+
+    with pytest.raises(ValueError, match="No events table"):
+      Client(
+          project_id="proj",
+          dataset_id="ds",
+          table_id="auto",
+          verify_schema=False,
+          bq_client=mock_bq,
+      )
+
+
+class TestDoctor:
+  """Tests for Client.doctor() (Feature #5)."""
+
+  def test_doctor_returns_report(self):
+    mock_bq = _mock_bq_client()
+    # Schema query returns all columns
+    schema_rows = [
+        _make_mock_row({"column_name": col, "data_type": "STRING"})
+        for col in [
+            "timestamp",
+            "event_type",
+            "session_id",
+            "content",
+            "agent",
+            "invocation_id",
+            "user_id",
+            "trace_id",
+            "span_id",
+            "parent_span_id",
+            "attributes",
+            "latency_ms",
+            "status",
+            "error_message",
+            "content_parts",
+            "is_truncated",
+        ]
+    ]
+    # Event coverage query
+    event_rows = [
+        _make_mock_row(
+            {"event_type": "USER_MESSAGE_RECEIVED", "event_count": 10}
+        ),
+        _make_mock_row({"event_type": "LLM_RESPONSE", "event_count": 5}),
+    ]
+
+    call_count = [0]
+
+    def mock_query(*args, **kwargs):
+      call_count[0] += 1
+      job = MagicMock()
+      if call_count[0] == 1:
+        job.result.return_value = schema_rows
+      else:
+        job.result.return_value = event_rows
+      return job
+
+    mock_bq.query = mock_query
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    report = client.doctor()
+
+    assert report["table"] == "proj.ds.agent_events"
+    assert report["schema"]["status"] == "ok"
+    assert "event_coverage" in report
+    assert isinstance(report["warnings"], list)
+    assert "ai_generate" in report
+
+
+class TestHitlMetrics:
+  """Tests for Client.hitl_metrics() (Feature #4)."""
+
+  def test_hitl_metrics_empty(self):
+    mock_bq = _mock_bq_client()
+    mock_job = MagicMock()
+    mock_job.result.return_value = []
+    mock_bq.query.return_value = mock_job
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    metrics = client.hitl_metrics()
+
+    assert metrics["total_hitl_events"] == 0
+    assert metrics["events"] == []
+    assert metrics["completion_rates"] == {
+        "confirmation": 0.0,
+        "credential": 0.0,
+        "input": 0.0,
+    }
+
+  def test_hitl_metrics_with_data(self):
+    mock_bq = _mock_bq_client()
+    mock_rows = [
+        _make_mock_row(
+            {
+                "event_type": "HITL_CONFIRMATION_REQUEST",
+                "event_count": 10,
+                "session_count": 5,
+                "completed_count": 0,
+                "avg_latency_ms": 200.0,
+            }
+        ),
+        _make_mock_row(
+            {
+                "event_type": "HITL_CONFIRMATION_REQUEST_COMPLETED",
+                "event_count": 8,
+                "session_count": 5,
+                "completed_count": 8,
+                "avg_latency_ms": 100.0,
+            }
+        ),
+    ]
+    mock_job = MagicMock()
+    mock_job.result.return_value = mock_rows
+    mock_bq.query.return_value = mock_job
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    metrics = client.hitl_metrics()
+
+    assert metrics["total_hitl_events"] == 18
+    assert len(metrics["events"]) == 2
+    assert metrics["completion_rates"]["confirmation"] == 0.8

@@ -170,6 +170,44 @@ _REQUIRED_COLUMNS = {
     "is_truncated",
 }
 
+_TABLE_EXISTS_QUERY = """\
+SELECT table_name
+FROM `{project}.{dataset}.INFORMATION_SCHEMA.TABLES`
+WHERE table_name IN ('agent_events', 'agent_events_v2')
+"""
+
+_AUTO_DETECT_TABLES = ["agent_events", "agent_events_v2"]
+
+_HITL_METRICS_QUERY = """\
+SELECT
+  event_type,
+  COUNT(*) AS event_count,
+  COUNT(DISTINCT session_id) AS session_count,
+  COUNTIF(
+    ENDS_WITH(event_type, '_COMPLETED')
+  ) AS completed_count,
+  AVG(
+    CAST(
+      JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS FLOAT64
+    )
+  ) AS avg_latency_ms
+FROM `{project}.{dataset}.{table}`
+WHERE event_type LIKE 'HITL_%'
+  AND {where}
+GROUP BY event_type
+ORDER BY event_count DESC
+"""
+
+_EVENT_COVERAGE_QUERY = """\
+SELECT
+  event_type,
+  COUNT(*) AS event_count
+FROM `{project}.{dataset}.{table}`
+WHERE {where}
+GROUP BY event_type
+ORDER BY event_count DESC
+"""
+
 
 # ------------------------------------------------------------------ #
 # Client                                                               #
@@ -186,7 +224,9 @@ class Client:
   Args:
       project_id: Google Cloud project ID.
       dataset_id: BigQuery dataset containing agent events.
-      table_id: Table name for agent events.
+      table_id: Table name for agent events. Pass ``"auto"``
+          to auto-detect (tries ``agent_events`` first, then
+          ``agent_events_v2``).
       location: BigQuery dataset location.
       gcs_bucket_name: Optional GCS bucket for resolving offloaded
           multimodal payloads.
@@ -213,13 +253,18 @@ class Client:
   ) -> None:
     self.project_id = project_id
     self.dataset_id = dataset_id
-    self.table_id = table_id
     self.location = location
     self.gcs_bucket_name = gcs_bucket_name
     self._bq_client = bq_client
-    self._table_ref = f"{project_id}.{dataset_id}.{table_id}"
     self.endpoint = endpoint or DEFAULT_ENDPOINT
     self.connection_id = connection_id
+
+    if table_id == "auto":
+      self.table_id = self._detect_table()
+    else:
+      self.table_id = table_id
+
+    self._table_ref = f"{project_id}.{dataset_id}.{self.table_id}"
 
     if verify_schema:
       self._verify_schema()
@@ -271,6 +316,261 @@ class Client:
           "Schema verification failed: %s. Continuing without verification.",
           e,
       )
+
+  def _detect_table(self) -> str:
+    """Auto-detects the events table name.
+
+    Checks for ``agent_events`` first (current ADK plugin
+    default), then ``agent_events_v2``.
+
+    Returns:
+        The detected table name.
+
+    Raises:
+        ValueError: If neither table exists.
+    """
+    try:
+      query = _TABLE_EXISTS_QUERY.format(
+          project=self.project_id,
+          dataset=self.dataset_id,
+      )
+      rows = list(self.bq_client.query(query).result())
+      existing = {r.get("table_name") for r in rows}
+
+      for candidate in _AUTO_DETECT_TABLES:
+        if candidate in existing:
+          logger.info("Auto-detected events table: %s", candidate)
+          return candidate
+
+      raise ValueError(
+          f"No events table found in "
+          f"{self.project_id}.{self.dataset_id}. "
+          f"Expected one of: {_AUTO_DETECT_TABLES}"
+      )
+    except Exception as e:
+      if isinstance(e, ValueError):
+        raise
+      logger.warning(
+          "Table auto-detection failed: %s. " "Falling back to 'agent_events'.",
+          e,
+      )
+      return "agent_events"
+
+  # -------------------------------------------------------------- #
+  # Diagnostics                                                      #
+  # -------------------------------------------------------------- #
+
+  def doctor(
+      self,
+      filters: Optional[TraceFilter] = None,
+  ) -> dict[str, Any]:
+    """Runs diagnostic checks on the SDK configuration.
+
+    Validates table schema, event type coverage, column
+    completeness, and AI.GENERATE permissions. Returns a
+    structured report with warnings and suggestions.
+
+    Args:
+        filters: Optional trace filters to scope the checks.
+
+    Returns:
+        Dict with diagnostic results::
+
+            {
+              "table": str,
+              "schema": {"status": "ok"|"warning"|"error", ...},
+              "event_coverage": {event_type: count, ...},
+              "warnings": [str, ...],
+              "ai_generate": {"status": "ok"|"unavailable", ...},
+            }
+    """
+    filt = filters or TraceFilter()
+    where, params = filt.to_sql_conditions()
+    report: dict[str, Any] = {
+        "table": self._table_ref,
+        "warnings": [],
+    }
+
+    # 1. Schema check
+    try:
+      schema_query = _VERIFY_SCHEMA_QUERY.format(
+          project=self.project_id,
+          dataset=self.dataset_id,
+      )
+      job_config = bigquery.QueryJobConfig(
+          query_parameters=[
+              bigquery.ScalarQueryParameter(
+                  "table_name",
+                  "STRING",
+                  self.table_id,
+              ),
+          ]
+      )
+      rows = list(
+          self.bq_client.query(schema_query, job_config=job_config).result()
+      )
+      columns = {r.get("column_name") for r in rows}
+      missing = _REQUIRED_COLUMNS - columns
+      if missing:
+        report["schema"] = {
+            "status": "warning",
+            "present": sorted(columns & _REQUIRED_COLUMNS),
+            "missing": sorted(missing),
+        }
+        report["warnings"].append(f"Missing columns: {sorted(missing)}")
+      else:
+        report["schema"] = {
+            "status": "ok",
+            "columns": sorted(columns),
+        }
+    except Exception as e:
+      report["schema"] = {"status": "error", "error": str(e)}
+      report["warnings"].append(f"Schema check failed: {e}")
+
+    # 2. Event coverage
+    try:
+      ev_query = _EVENT_COVERAGE_QUERY.format(
+          project=self.project_id,
+          dataset=self.dataset_id,
+          table=self.table_id,
+          where=where,
+      )
+      ev_config = bigquery.QueryJobConfig(
+          query_parameters=params,
+      )
+      ev_rows = list(
+          self.bq_client.query(ev_query, job_config=ev_config).result()
+      )
+      coverage = {r.get("event_type"): r.get("event_count") for r in ev_rows}
+      report["event_coverage"] = coverage
+
+      expected = {
+          "USER_MESSAGE_RECEIVED",
+          "AGENT_STARTING",
+          "AGENT_COMPLETED",
+          "LLM_REQUEST",
+          "LLM_RESPONSE",
+          "TOOL_STARTING",
+          "TOOL_COMPLETED",
+          "INVOCATION_STARTING",
+          "INVOCATION_COMPLETED",
+      }
+      missing_events = expected - set(coverage.keys())
+      if missing_events:
+        report["warnings"].append(
+            f"No events for types: {sorted(missing_events)}"
+        )
+    except Exception as e:
+      report["event_coverage"] = {"error": str(e)}
+      report["warnings"].append(f"Event coverage check failed: {e}")
+
+    # 3. AI.GENERATE availability
+    report["ai_generate"] = {
+        "endpoint": self.endpoint,
+        "connection_id": self.connection_id,
+        "is_legacy": self._is_legacy_model_ref(self.endpoint),
+    }
+    if self._is_legacy_model_ref(self.endpoint):
+      report["warnings"].append(
+          "Using legacy ML.GENERATE_TEXT model reference. "
+          "Consider migrating to AI.GENERATE endpoints."
+      )
+
+    return report
+
+  # -------------------------------------------------------------- #
+  # HITL Analytics                                                   #
+  # -------------------------------------------------------------- #
+
+  def hitl_metrics(
+      self,
+      filters: Optional[TraceFilter] = None,
+  ) -> dict[str, Any]:
+    """Returns Human-in-the-Loop interaction metrics.
+
+    Summarizes HITL event types: confirmation requests,
+    credential requests, and input requests, with completion
+    rates and average latency.
+
+    Args:
+        filters: Optional trace filters.
+
+    Returns:
+        Dict with HITL metrics::
+
+            {
+              "total_hitl_events": int,
+              "total_hitl_sessions": int,
+              "events": [{
+                "event_type": str,
+                "count": int,
+                "sessions": int,
+                "avg_latency_ms": float,
+              }, ...],
+              "completion_rates": {
+                "confirmation": float,
+                "credential": float,
+                "input": float,
+              },
+            }
+    """
+    filt = filters or TraceFilter()
+    where, params = filt.to_sql_conditions()
+
+    query = _HITL_METRICS_QUERY.format(
+        project=self.project_id,
+        dataset=self.dataset_id,
+        table=self.table_id,
+        where=where,
+    )
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=params,
+    )
+
+    rows = list(self.bq_client.query(query, job_config=job_config).result())
+
+    events = []
+    request_counts: dict[str, int] = {}
+    completed_counts: dict[str, int] = {}
+    total_events = 0
+    total_sessions = set()
+
+    for row in rows:
+      r = dict(row)
+      et = r.get("event_type", "")
+      count = r.get("event_count", 0)
+      sessions = r.get("session_count", 0)
+      total_events += count
+      total_sessions.update(range(sessions))
+
+      events.append(
+          {
+              "event_type": et,
+              "count": count,
+              "sessions": sessions,
+              "avg_latency_ms": float(r.get("avg_latency_ms") or 0),
+          }
+      )
+
+      # Track request vs completed for completion rates
+      for prefix in ("CONFIRMATION", "CREDENTIAL", "INPUT"):
+        if et == f"HITL_{prefix}_REQUEST":
+          request_counts[prefix.lower()] = count
+        elif et == f"HITL_{prefix}_REQUEST_COMPLETED":
+          completed_counts[prefix.lower()] = count
+
+    completion_rates = {}
+    for kind in ("confirmation", "credential", "input"):
+      req = request_counts.get(kind, 0)
+      comp = completed_counts.get(kind, 0)
+      completion_rates[kind] = comp / req if req > 0 else 0.0
+
+    return {
+        "total_hitl_events": total_events,
+        "total_hitl_sessions": len(total_sessions),
+        "events": events,
+        "completion_rates": completion_rates,
+    }
 
   # -------------------------------------------------------------- #
   # Trace Retrieval                                                  #
@@ -366,43 +666,7 @@ class Client:
     )
 
     results = list(self.bq_client.query(query, job_config=job_config).result())
-
-    # Group by session
-    sessions: dict[str, list[Span]] = {}
-    meta: dict[str, dict[str, Any]] = {}
-    for row in results:
-      row_dict = dict(row)
-      sid = row_dict.get("session_id", "unknown")
-      span = Span.from_bigquery_row(row_dict)
-      sessions.setdefault(sid, []).append(span)
-      if sid not in meta:
-        meta[sid] = {
-            "user_id": row_dict.get("user_id"),
-            "trace_id": row_dict.get("trace_id"),
-        }
-
-    traces = []
-    for sid, spans in sessions.items():
-      timestamps = [s.timestamp for s in spans if s.timestamp]
-      start = min(timestamps) if timestamps else None
-      end = max(timestamps) if timestamps else None
-      total_ms = None
-      if start and end:
-        total_ms = (end - start).total_seconds() * 1000
-
-      traces.append(
-          Trace(
-              trace_id=meta[sid].get("trace_id") or sid,
-              session_id=sid,
-              spans=spans,
-              user_id=meta[sid].get("user_id"),
-              start_time=start,
-              end_time=end,
-              total_latency_ms=total_ms,
-          )
-      )
-
-    return traces
+    return _build_traces_from_rows(results)
 
   # -------------------------------------------------------------- #
   # Evaluation                                                       #
@@ -414,6 +678,7 @@ class Client:
       filters: Optional[TraceFilter] = None,
       dataset: Optional[str] = None,
       golden_dataset: Optional[str] = None,
+      strict: bool = False,
   ) -> EvaluationReport:
     """Runs batch evaluation over traces.
 
@@ -428,6 +693,10 @@ class Client:
         dataset: Optional table name override.
         golden_dataset: Optional golden dataset table for
             comparison evaluation.
+        strict: When ``True``, sessions with unparseable or
+            empty judge output are marked as failed instead of
+            silently passing.  The report ``details`` will
+            include a ``parse_errors`` count.
 
     Returns:
         EvaluationReport with per-session and aggregate scores.
@@ -444,13 +713,16 @@ class Client:
           params,
       )
     elif isinstance(evaluator, LLMAsJudge):
-      return self._evaluate_llm_judge(
+      report = self._evaluate_llm_judge(
           evaluator,
           table,
           where,
           params,
           filt,
       )
+      if strict:
+        report = _apply_strict_mode(report)
+      return report
     else:
       raise TypeError(f"Unsupported evaluator type: {type(evaluator)}")
 
@@ -503,27 +775,45 @@ class Client:
       params: list,
       trace_filter: Optional[TraceFilter] = None,
   ) -> EvaluationReport:
-    """Runs LLM-as-judge evaluation.
+    """Runs LLM-as-judge evaluation over ALL criteria.
 
     Attempts AI.GENERATE first, then legacy ML.GENERATE_TEXT,
-    then falls back to the Gemini API.
+    then falls back to the Gemini API.  Each path evaluates
+    every criterion in the evaluator and merges the per-session
+    scores into a single report.
     """
+    criteria = evaluator._criteria
+    if not criteria:
+      return _build_report(
+          evaluator_name=evaluator.name,
+          dataset=f"{self._table_ref} WHERE {where}",
+          session_scores=[],
+      )
+
     # Try AI.GENERATE (new path) when endpoint is not a legacy ref
     if not self._is_legacy_model_ref(self.endpoint):
-      for criterion in evaluator._criteria:
-        try:
-          return self._ai_generate_judge(
+      try:
+        criterion_reports = []
+        for criterion in criteria:
+          report = self._ai_generate_judge(
               evaluator,
               criterion,
               table,
               where,
               params,
           )
-        except Exception as e:
-          logger.debug(
-              "AI.GENERATE judge failed, trying legacy: %s",
-              e,
-          )
+          criterion_reports.append((criterion, report))
+        return _merge_criterion_reports(
+            evaluator.name,
+            f"{self._table_ref} WHERE {where}",
+            criteria,
+            criterion_reports,
+        )
+      except Exception as e:
+        logger.debug(
+            "AI.GENERATE judge failed, trying legacy: %s",
+            e,
+        )
 
     # Try legacy BQML batch evaluation
     text_model = (
@@ -532,9 +822,10 @@ class Client:
         else (f"{self.project_id}.{self.dataset_id}.gemini_text_model")
     )
 
-    for criterion in evaluator._criteria:
-      try:
-        return self._bqml_judge(
+    try:
+      criterion_reports = []
+      for criterion in criteria:
+        report = self._bqml_judge(
             evaluator,
             criterion,
             table,
@@ -542,14 +833,21 @@ class Client:
             params,
             text_model,
         )
-      except Exception as e:
-        logger.debug(
-            "BQML judge failed, falling back to API: %s",
-            e,
-        )
+        criterion_reports.append((criterion, report))
+      return _merge_criterion_reports(
+          evaluator.name,
+          f"{self._table_ref} WHERE {where}",
+          criteria,
+          criterion_reports,
+      )
+    except Exception as e:
+      logger.debug(
+          "BQML judge failed, falling back to API: %s",
+          e,
+      )
 
-    # Fallback: fetch traces, evaluate via API
-    return self._api_judge(evaluator, table, where, params, trace_filter)
+    # Fallback: fetch traces using same table/filter, evaluate via API
+    return self._api_judge(evaluator, table, where, params)
 
   def _ai_generate_judge(
       self,
@@ -596,7 +894,9 @@ class Client:
             min(1.0, float(raw_score) / 10.0),
         )
 
-      passed = all(s >= criterion.threshold for s in scores.values())
+      passed = bool(scores) and all(
+          s >= criterion.threshold for s in scores.values()
+      )
       session_scores.append(
           SessionScore(
               session_id=sid,
@@ -660,7 +960,9 @@ class Client:
           if isinstance(v, (int, float)):
             scores[k] = float(v) / 10.0
 
-      passed = all(s >= criterion.threshold for s in scores.values())
+      passed = bool(scores) and all(
+          s >= criterion.threshold for s in scores.values()
+      )
       session_scores.append(
           SessionScore(
               session_id=sid,
@@ -684,10 +986,22 @@ class Client:
       table,
       where,
       params,
-      trace_filter: Optional[TraceFilter] = None,
   ) -> EvaluationReport:
-    """Evaluates using the Gemini API (fallback)."""
-    traces = self.list_traces(trace_filter or TraceFilter(limit=100))
+    """Evaluates using the Gemini API (fallback).
+
+    Fetches traces from the same table and filter as the BQ
+    evaluation paths, then evaluates each session via the
+    Gemini API.
+    """
+    query = _LIST_TRACES_QUERY.format(
+        project=self.project_id,
+        dataset=self.dataset_id,
+        table=table,
+        where=where,
+    )
+    job_config = bigquery.QueryJobConfig(query_parameters=params)
+    results = list(self.bq_client.query(query, job_config=job_config).result())
+    traces = _build_traces_from_rows(results)
 
     loop = asyncio.new_event_loop()
     try:
@@ -1211,4 +1525,137 @@ def _build_report(
       failed_sessions=failed,
       aggregate_scores=aggregate,
       session_scores=session_scores,
+  )
+
+
+def _merge_criterion_reports(
+    evaluator_name: str,
+    dataset: str,
+    criteria: list,
+    criterion_reports: list[tuple],
+) -> EvaluationReport:
+  """Merges single-criterion reports into a multi-criterion report.
+
+  Each entry in *criterion_reports* is a ``(criterion, report)``
+  pair.  Scores from all criteria are combined per session, and
+  ``passed`` is recalculated requiring every criterion to meet
+  its threshold.
+  """
+  session_data: dict[str, dict[str, Any]] = {}
+
+  for criterion, report in criterion_reports:
+    for ss in report.session_scores:
+      if ss.session_id not in session_data:
+        session_data[ss.session_id] = {
+            "scores": {},
+            "feedback": [],
+        }
+      session_data[ss.session_id]["scores"].update(ss.scores)
+      if ss.llm_feedback:
+        session_data[ss.session_id]["feedback"].append(ss.llm_feedback)
+
+  # Build threshold lookup from criteria
+  thresholds = {c.name: c.threshold for c in criteria}
+
+  session_scores = []
+  for sid, data in session_data.items():
+    scores = data["scores"]
+    # Must have at least one score AND all criteria above threshold
+    passed = bool(scores) and all(
+        scores.get(c.name, 0.0) >= thresholds.get(c.name, 0.5)
+        for c in criteria
+        if c.name in scores
+    )
+    session_scores.append(
+        SessionScore(
+            session_id=sid,
+            scores=scores,
+            passed=passed,
+            llm_feedback="\n".join(data["feedback"]) or None,
+        )
+    )
+
+  return _build_report(
+      evaluator_name=evaluator_name,
+      dataset=dataset,
+      session_scores=session_scores,
+  )
+
+
+def _build_traces_from_rows(results: list) -> list[Trace]:
+  """Groups BigQuery result rows into Trace objects.
+
+  Shared by ``list_traces`` and ``_api_judge`` to ensure
+  consistent trace construction.
+  """
+  sessions: dict[str, list[Span]] = {}
+  meta: dict[str, dict[str, Any]] = {}
+
+  for row in results:
+    row_dict = dict(row)
+    sid = row_dict.get("session_id", "unknown")
+    span = Span.from_bigquery_row(row_dict)
+    sessions.setdefault(sid, []).append(span)
+    if sid not in meta:
+      meta[sid] = {
+          "user_id": row_dict.get("user_id"),
+          "trace_id": row_dict.get("trace_id"),
+      }
+
+  traces = []
+  for sid, spans in sessions.items():
+    timestamps = [s.timestamp for s in spans if s.timestamp]
+    start = min(timestamps) if timestamps else None
+    end = max(timestamps) if timestamps else None
+    total_ms = None
+    if start and end:
+      total_ms = (end - start).total_seconds() * 1000
+
+    traces.append(
+        Trace(
+            trace_id=meta[sid].get("trace_id") or sid,
+            session_id=sid,
+            spans=spans,
+            user_id=meta[sid].get("user_id"),
+            start_time=start,
+            end_time=end,
+            total_latency_ms=total_ms,
+        )
+    )
+
+  return traces
+
+
+def _apply_strict_mode(report: EvaluationReport) -> EvaluationReport:
+  """Marks sessions with empty scores as failed (strict mode).
+
+  Returns a new report with updated pass/fail counts and a
+  ``parse_errors`` count in each affected session's ``details``.
+  """
+  parse_errors = 0
+  new_scores = []
+  for ss in report.session_scores:
+    if not ss.scores:
+      parse_errors += 1
+      new_scores.append(
+          SessionScore(
+              session_id=ss.session_id,
+              scores=ss.scores,
+              passed=False,
+              details={"parse_error": True},
+              llm_feedback=ss.llm_feedback,
+          )
+      )
+    else:
+      new_scores.append(ss)
+
+  passed = sum(1 for s in new_scores if s.passed)
+  return EvaluationReport(
+      dataset=report.dataset,
+      evaluator_name=report.evaluator_name,
+      total_sessions=report.total_sessions,
+      passed_sessions=passed,
+      failed_sessions=report.total_sessions - passed,
+      aggregate_scores=report.aggregate_scores,
+      session_scores=new_scores,
   )
