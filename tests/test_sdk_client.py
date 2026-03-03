@@ -916,3 +916,105 @@ class TestHitlMetrics:
     assert metrics["total_hitl_events"] == 18
     assert len(metrics["events"]) == 2
     assert metrics["completion_rates"]["confirmation"] == 0.8
+
+
+class TestFetchSessionMetadata:
+  """Tests that _fetch_session_metadata correctly maps BQ rows."""
+
+  @pytest.mark.asyncio
+  async def test_maps_hitl_and_state_changes(self):
+    from bigquery_agent_analytics.insights import InsightsConfig
+
+    mock_bq = _mock_bq_client()
+    mock_rows = [
+        _make_mock_row(
+            {
+                "session_id": "sess-1",
+                "event_count": 30,
+                "tool_calls": 5,
+                "tool_errors": 1,
+                "llm_calls": 8,
+                "turn_count": 4,
+                "total_latency_ms": 6000.0,
+                "avg_latency_ms": 200.0,
+                "agents_used": ["agent_a", "agent_b"],
+                "tools_used": ["search", "calc"],
+                "has_error": True,
+                "hitl_events": 3,
+                "state_changes": 7,
+                "start_time": datetime(2024, 6, 1, tzinfo=timezone.utc),
+                "end_time": datetime(2024, 6, 1, 0, 10, tzinfo=timezone.utc),
+            }
+        ),
+    ]
+    mock_job = MagicMock()
+    mock_job.result.return_value = mock_rows
+    mock_bq.query.return_value = mock_job
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    result = await client._fetch_session_metadata(
+        table="agent_events",
+        where="TRUE",
+        params=[],
+        config=InsightsConfig(),
+    )
+
+    assert len(result) == 1
+    meta = result[0]
+    assert meta.session_id == "sess-1"
+    assert meta.hitl_events == 3
+    assert meta.state_changes == 7
+    assert meta.event_count == 30
+    assert meta.has_error is True
+
+  @pytest.mark.asyncio
+  async def test_missing_hitl_fields_default_zero(self):
+    """Rows from older schemas omit hitl_events/state_changes."""
+    from bigquery_agent_analytics.insights import InsightsConfig
+
+    mock_bq = _mock_bq_client()
+    mock_rows = [
+        _make_mock_row(
+            {
+                "session_id": "sess-2",
+                "event_count": 10,
+                "tool_calls": 2,
+                "tool_errors": 0,
+                "llm_calls": 3,
+                "turn_count": 1,
+                "total_latency_ms": 1000.0,
+                "avg_latency_ms": 100.0,
+                "agents_used": [],
+                "tools_used": [],
+                "has_error": False,
+                "start_time": None,
+                "end_time": None,
+            }
+        ),
+    ]
+    mock_job = MagicMock()
+    mock_job.result.return_value = mock_rows
+    mock_bq.query.return_value = mock_job
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    result = await client._fetch_session_metadata(
+        table="agent_events",
+        where="TRUE",
+        params=[],
+        config=InsightsConfig(),
+    )
+
+    assert len(result) == 1
+    meta = result[0]
+    assert meta.hitl_events == 0
+    assert meta.state_changes == 0
