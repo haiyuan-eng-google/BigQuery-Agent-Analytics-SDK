@@ -771,7 +771,43 @@ class TestHITLAndStateDeltaLabelSummary:
     assert "counter" in span.summary
     assert "status" in span.summary
 
-  def test_state_delta_summary_flat_content(self):
+  def test_state_delta_summary_from_attributes(self):
+    """Plugin-emitted STATE_DELTA stores delta in attributes.state_delta."""
+    span = Span(
+        event_type="STATE_DELTA",
+        agent="agent",
+        timestamp=datetime.now(timezone.utc),
+        content={},
+        attributes={"state_delta": {"counter": 5, "phase": "running"}},
+    )
+    assert "counter" in span.summary
+    assert "phase" in span.summary
+
+  def test_state_delta_summary_attributes_preferred_over_content(self):
+    """attributes.state_delta takes priority over content.delta."""
+    span = Span(
+        event_type="STATE_DELTA",
+        agent="agent",
+        timestamp=datetime.now(timezone.utc),
+        content={"delta": {"old_key": 1}},
+        attributes={"state_delta": {"new_key": 2}},
+    )
+    assert "new_key" in span.summary
+    assert "old_key" not in span.summary
+
+  def test_state_delta_summary_fallback_to_content_delta(self):
+    """Falls back to content.delta when attributes.state_delta is absent."""
+    span = Span(
+        event_type="STATE_DELTA",
+        agent="agent",
+        timestamp=datetime.now(timezone.utc),
+        content={"delta": {"counter": 5, "status": "running"}},
+    )
+    assert "counter" in span.summary
+    assert "status" in span.summary
+
+  def test_state_delta_summary_fallback_to_flat_content(self):
+    """Falls back to flat content when neither attributes nor delta key."""
     span = Span(
         event_type="STATE_DELTA",
         agent="agent",

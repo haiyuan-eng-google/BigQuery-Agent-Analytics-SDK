@@ -285,12 +285,16 @@ class Span:
       return text
 
     # STATE_DELTA: show keys changed
+    # Plugin stores state delta in attributes.state_delta; fall back to
+    # content.delta and then content itself for older formats.
     if self.event_type == "STATE_DELTA":
-      delta = self.content.get("delta") or self.content
+      delta = self.attributes.get("state_delta")
+      if not delta:
+        delta = self.content.get("delta")
+      if not delta:
+        delta = self.content
       if isinstance(delta, dict):
-        keys = [k for k in delta.keys() if k != "delta"]
-        if not keys and isinstance(delta.get("delta"), dict):
-          keys = list(delta["delta"].keys())
+        keys = list(delta.keys())
         if keys:
           text = f"keys: {', '.join(keys)}"
           if len(text) > 120:

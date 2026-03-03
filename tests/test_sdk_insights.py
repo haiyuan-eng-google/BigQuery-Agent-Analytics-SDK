@@ -758,6 +758,83 @@ class TestSessionMetadataQuery:
     assert "JSON_EXTRACT_SCALAR" not in _SESSION_METADATA_QUERY
 
 
+class TestSessionMetadataFromRow:
+  """Tests that SessionMetadata correctly parses hitl/state fields from rows."""
+
+  def test_metadata_from_row_with_hitl_and_state(self):
+    """Simulates a BigQuery row dict with hitl_events and state_changes."""
+    row = {
+        "session_id": "sess-1",
+        "event_count": 25,
+        "tool_calls": 4,
+        "tool_errors": 1,
+        "llm_calls": 5,
+        "turn_count": 3,
+        "total_latency_ms": 4500.0,
+        "avg_latency_ms": 180.0,
+        "agents_used": ["agent_a"],
+        "tools_used": ["search", "calc"],
+        "has_error": True,
+        "hitl_events": 2,
+        "state_changes": 5,
+        "start_time": datetime(2024, 6, 1, tzinfo=timezone.utc),
+        "end_time": datetime(2024, 6, 1, 0, 5, tzinfo=timezone.utc),
+    }
+    meta = SessionMetadata(
+        session_id=row["session_id"],
+        event_count=row["event_count"],
+        tool_calls=row["tool_calls"],
+        tool_errors=row["tool_errors"],
+        llm_calls=row["llm_calls"],
+        turn_count=row["turn_count"],
+        total_latency_ms=float(row["total_latency_ms"]),
+        avg_latency_ms=float(row["avg_latency_ms"]),
+        agents_used=row["agents_used"],
+        tools_used=row["tools_used"],
+        has_error=bool(row["has_error"]),
+        hitl_events=int(row.get("hitl_events") or 0),
+        state_changes=int(row.get("state_changes") or 0),
+        start_time=row["start_time"],
+        end_time=row["end_time"],
+    )
+    assert meta.hitl_events == 2
+    assert meta.state_changes == 5
+    assert meta.event_count == 25
+
+  def test_metadata_from_row_missing_hitl_defaults_zero(self):
+    """Rows from older schemas may omit hitl_events/state_changes."""
+    row = {
+        "session_id": "sess-2",
+        "event_count": 10,
+        "tool_calls": 2,
+        "tool_errors": 0,
+        "llm_calls": 3,
+        "turn_count": 1,
+        "total_latency_ms": 1000.0,
+        "avg_latency_ms": 100.0,
+        "agents_used": [],
+        "tools_used": [],
+        "has_error": False,
+    }
+    meta = SessionMetadata(
+        session_id=row["session_id"],
+        event_count=row["event_count"],
+        tool_calls=row["tool_calls"],
+        tool_errors=row["tool_errors"],
+        llm_calls=row["llm_calls"],
+        turn_count=row["turn_count"],
+        total_latency_ms=float(row["total_latency_ms"]),
+        avg_latency_ms=float(row["avg_latency_ms"]),
+        agents_used=row["agents_used"],
+        tools_used=row["tools_used"],
+        has_error=bool(row["has_error"]),
+        hitl_events=int(row.get("hitl_events") or 0),
+        state_changes=int(row.get("state_changes") or 0),
+    )
+    assert meta.hitl_events == 0
+    assert meta.state_changes == 0
+
+
 class TestAIGenerateTemplates:
   """Tests for AI.GENERATE SQL template strings."""
 
