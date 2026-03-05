@@ -398,9 +398,9 @@ class TestContextGraphManager:
         session_id="sess-1",
         current_state_fn=bad_fn,
     )
-    # Should not crash; entity is skipped
-    assert report.is_safe_to_approve
-    assert report.stale_entities == 0
+    # Fail-closed: callback failure → not safe to approve
+    assert not report.is_safe_to_approve
+    assert report.check_failed is True
 
   def test_detect_world_changes_query_failure_is_fail_closed(self):
     mock_client = MagicMock()
@@ -465,7 +465,7 @@ class TestContextGraphManager:
     assert result == []
 
   def test_extract_query_has_output_schema(self):
-    mgr = self._make_manager()
+    self._make_manager()
     from bigquery_agent_analytics.context_graph import (
         _BIZ_NODE_OUTPUT_SCHEMA,
         _EXTRACT_BIZ_NODES_QUERY,
@@ -921,7 +921,7 @@ class TestClientContextGraph:
         "bigquery_agent_analytics.client.bigquery.Client"
     ):
       from bigquery_agent_analytics.client import Client
-      from bigquery_agent_analytics.trace import Span, Trace
+      from bigquery_agent_analytics.trace import Trace
 
       with patch.object(Client, "_verify_schema"):
         client = Client(

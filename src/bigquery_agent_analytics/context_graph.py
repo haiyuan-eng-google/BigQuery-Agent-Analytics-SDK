@@ -58,12 +58,10 @@ Example usage::
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
 from datetime import timezone
-import json
 import logging
 from typing import Any, Optional
 
@@ -1300,6 +1298,7 @@ class ContextGraphManager:
 
     alerts: list[WorldChangeAlert] = []
     stale_count = 0
+    callback_failures = 0
 
     for node in nodes:
       if current_state_fn is not None:
@@ -1310,6 +1309,7 @@ class ContextGraphManager:
               "World state check failed for %s: %s",
               node.node_value, e,
           )
+          callback_failures += 1
           continue
 
         if not state.get("available", True):
@@ -1331,6 +1331,16 @@ class ContextGraphManager:
                   ),
               )
           )
+
+    if callback_failures > 0:
+      return WorldChangeReport(
+          session_id=session_id,
+          alerts=alerts,
+          total_entities_checked=len(nodes),
+          stale_entities=stale_count,
+          is_safe_to_approve=False,
+          check_failed=True,
+      )
 
     return WorldChangeReport(
         session_id=session_id,
