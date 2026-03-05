@@ -551,6 +551,19 @@ class TestContextGraphManager:
     assert len(received_timestamps) == 1
     assert received_timestamps[0] == eval_time
 
+  def test_cross_link_id_uses_biz_node_id(self):
+    from bigquery_agent_analytics.context_graph import (
+        _INSERT_CROSS_LINKS_QUERY,
+    )
+    assert "b.biz_node_id AS link_id" in _INSERT_CROSS_LINKS_QUERY
+
+  def test_merge_deletes_stale_biz_nodes(self):
+    from bigquery_agent_analytics.context_graph import (
+        _EXTRACT_BIZ_NODES_QUERY,
+    )
+    assert "WHEN NOT MATCHED BY SOURCE" in _EXTRACT_BIZ_NODES_QUERY
+    assert "DELETE" in _EXTRACT_BIZ_NODES_QUERY
+
 
 # ------------------------------------------------------------------ #
 # Client integration test                                              #
@@ -591,3 +604,34 @@ class TestClientContextGraph:
         cfg = ContextGraphConfig(graph_name="custom_graph")
         mgr = client.context_graph(config=cfg)
         assert mgr.config.graph_name == "custom_graph"
+
+  def test_get_session_trace_gql_fallback_on_empty(self):
+    """GQL with no edges falls back to flat get_session_trace."""
+    with patch(
+        "bigquery_agent_analytics.client.bigquery.Client"
+    ):
+      from bigquery_agent_analytics.client import Client
+      from bigquery_agent_analytics.trace import Trace
+
+      with patch.object(Client, "_verify_schema"):
+        client = Client(
+            project_id="p",
+            dataset_id="d",
+        )
+        # GQL returns empty
+        with patch.object(
+            ContextGraphManager, "reconstruct_trace_gql",
+            return_value=[],
+        ):
+          mock_trace = Trace(
+              trace_id="t1", session_id="sess-1", spans=[]
+          )
+          with patch.object(
+              Client, "get_session_trace",
+              return_value=mock_trace,
+          ) as mock_flat:
+            result = client.get_session_trace_gql(
+                session_id="sess-1"
+            )
+            mock_flat.assert_called_once_with("sess-1")
+            assert result.session_id == "sess-1"

@@ -279,12 +279,15 @@ ON target.biz_node_id = source.biz_node_id
 WHEN MATCHED THEN
   UPDATE SET confidence = source.confidence,
              artifact_uri = source.artifact_uri
-WHEN NOT MATCHED THEN
+WHEN NOT MATCHED BY TARGET THEN
   INSERT (biz_node_id, span_id, session_id, node_type, node_value,
           confidence, artifact_uri)
   VALUES (source.biz_node_id, source.span_id, source.session_id,
           source.node_type, source.node_value, source.confidence,
           source.artifact_uri)
+WHEN NOT MATCHED BY SOURCE
+  AND target.session_id IN UNNEST(@session_ids) THEN
+  DELETE
 """
 
 _EXTRACT_BIZ_NODES_SIMPLE_QUERY = """\
@@ -352,7 +355,7 @@ INSERT INTO `{project}.{dataset}.{cross_links_table}`
   (link_id, span_id, session_id, biz_node_id, node_value, link_type,
    artifact_uri, created_at)
 SELECT
-  CONCAT(b.span_id, ':', b.node_value) AS link_id,
+  b.biz_node_id AS link_id,
   b.span_id,
   b.session_id,
   b.biz_node_id,

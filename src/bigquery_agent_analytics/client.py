@@ -1705,7 +1705,10 @@ class Client:
     Property Graph to reconstruct the parent→child span tree natively.
 
     Requires a Property Graph to have been created via
-    :meth:`ContextGraphManager.create_property_graph`.
+    :meth:`ContextGraphManager.create_property_graph`.  Falls back
+    to :meth:`get_session_trace` (flat SQL) when the GQL query
+    returns no edges (e.g. sparse/flat traces with no parent→child
+    relationships).
 
     Args:
         session_id: The session ID to reconstruct.
@@ -1713,18 +1716,17 @@ class Client:
 
     Returns:
         A Trace object with all spans for the session.
-
-    Raises:
-        ValueError: If no events found for the session ID.
     """
     mgr = self.context_graph(config=config)
     rows = mgr.reconstruct_trace_gql(session_id=session_id)
 
     if not rows:
-      raise ValueError(
-          f"No GQL results for session_id={session_id}. "
-          "Ensure the Property Graph exists."
+      logger.info(
+          "No GQL edges for session_id=%s (flat/sparse trace); "
+          "falling back to flat SQL query.",
+          session_id,
       )
+      return self.get_session_trace(session_id)
 
     # Deduplicate spans from parent/child pairs
     seen: dict[str, dict[str, Any]] = {}
