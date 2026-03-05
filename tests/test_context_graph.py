@@ -211,6 +211,9 @@ class TestContextGraphManager:
     assert "BizNode" in ddl
     assert "Caused" in ddl
     assert "Evaluated" in ddl
+    # P1: composite keys
+    assert "KEY (biz_node_id)" in ddl
+    assert "KEY (link_id)" in ddl
 
   def test_get_property_graph_ddl_custom_name(self):
     mgr = self._make_manager()
@@ -227,7 +230,9 @@ class TestContextGraphManager:
     assert "MATCH" in gql
     assert "Caused" in gql
     assert "Evaluated" in gql
-    assert "Yahoo Homepage" in gql
+    # P2: biz_entity is parameterized, not interpolated
+    assert "@biz_entity" in gql
+    assert "Yahoo Homepage" not in gql
 
   def test_get_reasoning_chain_gql_no_entity(self):
     mgr = self._make_manager()
@@ -235,7 +240,7 @@ class TestContextGraphManager:
         decision_event_type="AGENT_COMPLETED",
     )
     assert "GRAPH" in gql
-    assert "Yahoo Homepage" not in gql
+    assert "@biz_entity" not in gql
 
   def test_get_causal_chain_gql(self):
     mgr = self._make_manager()
@@ -395,7 +400,8 @@ class TestContextGraphManager:
 
     result = mgr.create_cross_links(["sess-1"])
     assert result is True
-    assert mock_client.query.call_count == 2  # create + insert
+    # create table + delete old links + insert new links
+    assert mock_client.query.call_count == 3
 
   def test_create_cross_links_failure(self):
     mock_client = MagicMock()

@@ -207,49 +207,61 @@ class ContextGraphConfig(BaseModel):
 # ------------------------------------------------------------------ #
 
 _EXTRACT_BIZ_NODES_QUERY = """\
-CREATE OR REPLACE TABLE `{project}.{dataset}.{biz_table}` AS
-SELECT
-  base.span_id,
-  base.session_id,
-  JSON_EXTRACT_SCALAR(entity, '$.entity_type') AS node_type,
-  JSON_EXTRACT_SCALAR(entity, '$.entity_value') AS node_value,
-  CAST(
-    COALESCE(JSON_EXTRACT_SCALAR(entity, '$.confidence'), '1.0')
-    AS FLOAT64
-  ) AS confidence
-FROM `{project}.{dataset}.{table}` AS base,
-UNNEST(JSON_EXTRACT_ARRAY(
-  -- Strip markdown code fences (```json ... ```) from LLM output
-  REGEXP_REPLACE(
+MERGE `{project}.{dataset}.{biz_table}` AS target
+USING (
+  SELECT
+    CONCAT(base.span_id, ':', JSON_EXTRACT_SCALAR(entity, '$.entity_type'),
+           ':', JSON_EXTRACT_SCALAR(entity, '$.entity_value')
+    ) AS biz_node_id,
+    base.span_id,
+    base.session_id,
+    JSON_EXTRACT_SCALAR(entity, '$.entity_type') AS node_type,
+    JSON_EXTRACT_SCALAR(entity, '$.entity_value') AS node_value,
+    CAST(
+      COALESCE(JSON_EXTRACT_SCALAR(entity, '$.confidence'), '1.0')
+      AS FLOAT64
+    ) AS confidence
+  FROM `{project}.{dataset}.{table}` AS base,
+  UNNEST(JSON_EXTRACT_ARRAY(
+    -- Strip markdown code fences (```json ... ```) from LLM output
     REGEXP_REPLACE(
-      AI.GENERATE(
-        CONCAT(
-          'Extract business entities from this agent payload. ',
-          'Entity types: {entity_types}. ',
-          'Return ONLY a JSON array of objects with entity_type, ',
-          'entity_value, and confidence (0-1). ',
-          'No markdown, no explanation, just the JSON array.',
-          '\\n\\nPayload:\\n',
-          COALESCE(
-            JSON_EXTRACT_SCALAR(base.content, '$.text_summary'),
-            JSON_EXTRACT_SCALAR(base.content, '$.response'),
-            JSON_EXTRACT_SCALAR(base.content, '$.text'),
-            TO_JSON_STRING(base.content)
-          )
-        ),
-        endpoint => '{endpoint}'
-      ).result,
-      r'^```(?:json)?\\s*', ''),
-    r'\\s*```$', '')
-)) AS entity
-WHERE base.session_id IN UNNEST(@session_ids)
-  AND base.event_type IN (
-    'USER_MESSAGE_RECEIVED',
-    'LLM_RESPONSE',
-    'TOOL_COMPLETED',
-    'AGENT_COMPLETED'
-  )
-  AND base.content IS NOT NULL
+      REGEXP_REPLACE(
+        AI.GENERATE(
+          CONCAT(
+            'Extract business entities from this agent payload. ',
+            'Entity types: {entity_types}. ',
+            'Return ONLY a JSON array of objects with entity_type, ',
+            'entity_value, and confidence (0-1). ',
+            'No markdown, no explanation, just the JSON array.',
+            '\\n\\nPayload:\\n',
+            COALESCE(
+              JSON_EXTRACT_SCALAR(base.content, '$.text_summary'),
+              JSON_EXTRACT_SCALAR(base.content, '$.response'),
+              JSON_EXTRACT_SCALAR(base.content, '$.text'),
+              TO_JSON_STRING(base.content)
+            )
+          ),
+          endpoint => '{endpoint}'
+        ).result,
+        r'^```(?:json)?\\s*', ''),
+      r'\\s*```$', '')
+  )) AS entity
+  WHERE base.session_id IN UNNEST(@session_ids)
+    AND base.event_type IN (
+      'USER_MESSAGE_RECEIVED',
+      'LLM_RESPONSE',
+      'TOOL_COMPLETED',
+      'AGENT_COMPLETED'
+    )
+    AND base.content IS NOT NULL
+) AS source
+ON target.biz_node_id = source.biz_node_id
+WHEN MATCHED THEN
+  UPDATE SET confidence = source.confidence
+WHEN NOT MATCHED THEN
+  INSERT (biz_node_id, span_id, session_id, node_type, node_value, confidence)
+  VALUES (source.biz_node_id, source.span_id, source.session_id,
+          source.node_type, source.node_value, source.confidence)
 """
 
 _EXTRACT_BIZ_NODES_SIMPLE_QUERY = """\
@@ -277,6 +289,7 @@ ORDER BY base.timestamp ASC
 
 _CREATE_BIZ_NODES_TABLE_QUERY = """\
 CREATE TABLE IF NOT EXISTS `{project}.{dataset}.{biz_table}` (
+  biz_node_id STRING,
   span_id STRING,
   session_id STRING,
   node_type STRING,
@@ -287,27 +300,36 @@ CREATE TABLE IF NOT EXISTS `{project}.{dataset}.{biz_table}` (
 
 _INSERT_BIZ_NODES_QUERY = """\
 INSERT INTO `{project}.{dataset}.{biz_table}`
-  (span_id, session_id, node_type, node_value, confidence)
+  (biz_node_id, span_id, session_id, node_type, node_value, confidence)
 VALUES
   {values}
 """
 
 _CREATE_CROSS_LINKS_TABLE_QUERY = """\
 CREATE TABLE IF NOT EXISTS `{project}.{dataset}.{cross_links_table}` (
+  link_id STRING,
   span_id STRING,
   session_id STRING,
+  biz_node_id STRING,
   node_value STRING,
   link_type STRING,
   created_at TIMESTAMP
 )
 """
 
+_DELETE_CROSS_LINKS_FOR_SESSIONS_QUERY = """\
+DELETE FROM `{project}.{dataset}.{cross_links_table}`
+WHERE session_id IN UNNEST(@session_ids)
+"""
+
 _INSERT_CROSS_LINKS_QUERY = """\
 INSERT INTO `{project}.{dataset}.{cross_links_table}`
-  (span_id, session_id, node_value, link_type, created_at)
+  (link_id, span_id, session_id, biz_node_id, node_value, link_type, created_at)
 SELECT
+  CONCAT(b.span_id, ':', b.node_value) AS link_id,
   b.span_id,
   b.session_id,
+  b.biz_node_id,
   b.node_value,
   'EVALUATED' AS link_type,
   CURRENT_TIMESTAMP() AS created_at
@@ -333,15 +355,16 @@ CREATE OR REPLACE PROPERTY GRAPH `{project}.{dataset}.{graph_name}`
         status,
         error_message
       ),
-    -- Business domain nodes (extracted entities)
+    -- Business domain nodes (extracted entities, keyed by composite ID)
     `{project}.{dataset}.{biz_table}` AS BizNode
-      KEY (node_value)
+      KEY (biz_node_id)
       LABEL BizNode
       PROPERTIES (
         node_type,
         node_value,
         confidence,
-        session_id
+        session_id,
+        span_id
       )
   )
   EDGE TABLES (
@@ -354,9 +377,9 @@ CREATE OR REPLACE PROPERTY GRAPH `{project}.{dataset}.{graph_name}`
 
     -- Cross-link: technical event -> business entity it evaluated
     `{project}.{dataset}.{cross_links_table}` AS Evaluated
-      KEY (span_id)
+      KEY (link_id)
       SOURCE KEY (span_id) REFERENCES TechNode (span_id)
-      DESTINATION KEY (node_value) REFERENCES BizNode (node_value)
+      DESTINATION KEY (biz_node_id) REFERENCES BizNode (biz_node_id)
       LABEL Evaluated
   )
 """
@@ -367,7 +390,7 @@ MATCH
   (decision:TechNode)-[c:Caused]->{{1,{max_hops}}}(step:TechNode)
     -[e:Evaluated]->(biz:BizNode)
 WHERE decision.event_type = @decision_event_type
-  {biz_filter}
+  {biz_filter_clause}
 RETURN
   TO_JSON(decision) AS decision_node,
   decision.span_id AS decision_span_id,
@@ -416,6 +439,7 @@ LIMIT @result_limit
 
 _BIZ_NODES_FOR_SESSION_QUERY = """\
 SELECT
+  biz_node_id,
   node_type,
   node_value,
   confidence,
@@ -530,10 +554,22 @@ class ContextGraphManager:
       return self._extract_via_ai_generate(session_ids)
     return self._extract_payloads_for_client(session_ids)
 
+  def _ensure_biz_nodes_table(self) -> None:
+    """Creates the biz_nodes table if it does not exist."""
+    ddl = _CREATE_BIZ_NODES_TABLE_QUERY.format(
+        project=self.project_id,
+        dataset=self.dataset_id,
+        biz_table=self.config.biz_nodes_table,
+    )
+    job = self.client.query(ddl)
+    job.result()
+
   def _extract_via_ai_generate(
       self, session_ids: list[str]
   ) -> list[BizNode]:
-    """Server-side extraction using AI.GENERATE."""
+    """Server-side extraction using AI.GENERATE with MERGE upsert."""
+    self._ensure_biz_nodes_table()
+
     entity_types_str = ", ".join(self.config.entity_types)
     query = _EXTRACT_BIZ_NODES_QUERY.format(
         project=self.project_id,
@@ -668,6 +704,7 @@ class ContextGraphManager:
 
     rows = [
         {
+            "biz_node_id": f"{n.span_id}:{n.node_type}:{n.node_value}",
             "span_id": n.span_id,
             "session_id": n.session_id,
             "node_type": n.node_type,
@@ -721,19 +758,31 @@ class ContextGraphManager:
       logger.warning("Failed to create cross-links table: %s", e)
       return False
 
-    insert_query = _INSERT_CROSS_LINKS_QUERY.format(
-        project=self.project_id,
-        dataset=self.dataset_id,
-        biz_table=self.config.biz_nodes_table,
-        cross_links_table=self.config.cross_links_table,
-    )
-
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ArrayQueryParameter(
                 "session_ids", "STRING", session_ids
             ),
         ]
+    )
+
+    # Delete existing cross-links for these sessions (idempotent)
+    try:
+      delete_query = _DELETE_CROSS_LINKS_FOR_SESSIONS_QUERY.format(
+          project=self.project_id,
+          dataset=self.dataset_id,
+          cross_links_table=self.config.cross_links_table,
+      )
+      job = self.client.query(delete_query, job_config=job_config)
+      job.result()
+    except Exception:
+      pass  # table may be empty or not exist yet
+
+    insert_query = _INSERT_CROSS_LINKS_QUERY.format(
+        project=self.project_id,
+        dataset=self.dataset_id,
+        biz_table=self.config.biz_nodes_table,
+        cross_links_table=self.config.cross_links_table,
     )
 
     try:
@@ -826,16 +875,16 @@ class ContextGraphManager:
     name = graph_name or self.config.graph_name
     hops = max_hops or self.config.max_hops
 
-    biz_filter = ""
+    biz_filter_clause = ""
     if biz_entity:
-      biz_filter = f"AND biz.node_value = '{biz_entity}'"
+      biz_filter_clause = "AND biz.node_value = @biz_entity"
 
     return _GQL_REASONING_CHAIN_QUERY.format(
         project=self.project_id,
         dataset=self.dataset_id,
         graph_name=name,
         max_hops=hops,
-        biz_filter=biz_filter,
+        biz_filter_clause=biz_filter_clause,
     )
 
   def explain_decision(
@@ -869,16 +918,22 @@ class ContextGraphManager:
         result_limit=result_limit,
     )
 
-    job_config = bigquery.QueryJobConfig(
-        query_parameters=[
-            bigquery.ScalarQueryParameter(
-                "decision_event_type", "STRING", decision_event_type
-            ),
-            bigquery.ScalarQueryParameter(
-                "result_limit", "INT64", result_limit
-            ),
-        ]
-    )
+    params = [
+        bigquery.ScalarQueryParameter(
+            "decision_event_type", "STRING", decision_event_type
+        ),
+        bigquery.ScalarQueryParameter(
+            "result_limit", "INT64", result_limit
+        ),
+    ]
+    if biz_entity:
+      params.append(
+          bigquery.ScalarQueryParameter(
+              "biz_entity", "STRING", biz_entity
+          )
+      )
+
+    job_config = bigquery.QueryJobConfig(query_parameters=params)
 
     try:
       job = self.client.query(query, job_config=job_config)
@@ -1026,7 +1081,8 @@ class ContextGraphManager:
         current_state_fn: A callable that takes a BizNode and returns
             a dict with keys ``available`` (bool), ``current_value``
             (str), and optionally ``drift_type`` (str).  If None,
-            a simulated check is performed.
+            no drift checks are performed and a safe report is
+            returned with the entity count.
 
     Returns:
         WorldChangeReport with alerts for any detected drift.
