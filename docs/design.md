@@ -198,10 +198,11 @@ As demonstrated in the [e2e demo](../examples/e2e_demo.py):
    │ (requires ADK)   │  │                   │  │(requires bigframes) │
    └──────────────────┘  └───────────────────┘  └─────────────────────┘
 
-   ┌──────────────────┐  ┌───────────────────┐
-   │event_semantics   │  │     views         │
-   │(canonical helpers│  │(per-event BQ views│
-   └──────────────────┘  └───────────────────┘
+   ┌──────────────────┐  ┌───────────────────┐  ┌──────────────────────┐
+   │event_semantics   │  │     views         │  │   context_graph      │
+   │(canonical helpers│  │(per-event BQ views│  │(Property Graph, GQL, │
+   └──────────────────┘  └───────────────────┘  │ world-change detect) │
+                                                └──────────────────────┘
 ```
 
 ### 3.2 Module Categorization
@@ -215,6 +216,7 @@ As demonstrated in the [e2e demo](../examples/e2e_demo.py):
 | **Feedback & Insights** | `feedback.py`, `insights.py` | Drift detection, question distribution, multi-stage analysis pipeline |
 | **AI/ML** | `ai_ml_integration.py`, `bigframes_evaluator.py` | BigQuery AI.GENERATE, embeddings, anomaly detection, DataFrame API |
 | **Memory** | `memory_service.py` | Cross-session context retrieval, semantic search, user profiling |
+| **Context Graph** | `context_graph.py` | Property Graph linking traces to business entities, BizNode extraction via AI.GENERATE, GQL traversal, world-change detection, artifact lineage |
 | **Utilities** | `event_semantics.py`, `views.py` | Canonical event type predicates, per-event-type BigQuery view management |
 | **Package** | `__init__.py` | Graceful optional import aggregation |
 
@@ -842,6 +844,42 @@ result = bbq.ai.generate(
 
 Returns `bigframes.DataFrame` that can be displayed directly in Jupyter notebooks.
 
+### 4.14 `context_graph.py` — Property Graph & World-Change Detection
+
+Builds a BigQuery Property Graph that cross-links technical execution traces to business-domain entities. The module is organized around a 4-pillar architecture:
+
+**Pillar 1: TechNodes** — The existing `agent_events` table serves as the technical graph. Each row is a node with `span_id`, `parent_span_id`, `event_type`, etc.
+
+**Pillar 2: BizNodes** — Business entities extracted from trace payloads via `AI.GENERATE` with structured `output_schema`. Stored in `context_graph_biz_nodes` with composite key `biz_node_id = span_id:node_type:node_value`.
+
+**Pillar 3: Caused edges** — Implicit edges from TechNode to BizNode via the shared `span_id` foreign key.
+
+**Pillar 4: Evaluated cross-links** — Explicit edges stored in `context_graph_cross_links`, connecting BizNodes to their evaluation context. Carries `artifact_uri` and `link_type`.
+
+**Key design decisions:**
+
+| Decision | Rationale |
+|----------|-----------|
+| `output_schema` in AI.GENERATE | Forces structured JSON output; eliminates post-hoc parsing failures |
+| Composite `biz_node_id` | Prevents key collisions when the same span produces multiple entities |
+| MERGE with DELETE | `WHEN NOT MATCHED BY SOURCE ... DELETE` cleans stale nodes on re-extraction |
+| Fail-closed world-change | Query or callback errors → `check_failed=True, is_safe_to_approve=False` |
+| Legacy endpoint rejection | `project.dataset.model` refs raise `ValueError` instead of silently producing bad URLs |
+
+**Key methods on `ContextGraphManager`:**
+
+| Method | Description |
+|--------|-------------|
+| `build_context_graph(session_ids)` | End-to-end pipeline: extract → cross-link → create graph |
+| `extract_biz_nodes(session_ids)` | Extract business entities via AI.GENERATE or client-side |
+| `store_biz_nodes(nodes)` | Persist BizNodes to BigQuery |
+| `create_cross_links(session_ids)` | Create Evaluated edges between BizNodes and TechNodes |
+| `create_property_graph()` | Execute `CREATE PROPERTY GRAPH` DDL |
+| `detect_world_changes(session_id, fn)` | Check if business entities have drifted since evaluation |
+| `reconstruct_trace_gql(session_id)` | GQL-based trace reconstruction with quantified-path traversal |
+| `explain_decision(event_type, entity)` | Get the reasoning chain for a specific decision |
+| `get_biz_nodes_for_session(session_id)` | Read BizNodes for a session |
+
 ---
 
 ## 5. Data Model
@@ -934,6 +972,9 @@ The SDK may create additional tables for derived data:
 | `session_evaluations` | `BatchEvaluator.store_evaluation_results()` | Persisted evaluation scores |
 | `latency_arima_model` | `AnomalyDetector.train_latency_model()` | ARIMA time-series model |
 | `behavior_autoencoder_model` | `AnomalyDetector.train_behavior_model()` | Autoencoder anomaly detection model |
+| `context_graph_biz_nodes` | `ContextGraphManager.extract_biz_nodes()` | Business entities extracted from traces via AI.GENERATE |
+| `context_graph_cross_links` | `ContextGraphManager.create_cross_links()` | Cross-link edges connecting BizNodes to TechNodes |
+| `agent_context_graph` | `ContextGraphManager.create_property_graph()` | BigQuery Property Graph (DDL) with TechNode, BizNode, Caused, Evaluated |
 
 ### 5.5 Pydantic Data Models
 
@@ -968,6 +1009,26 @@ InsightsReport
 ├── aggregated: AggregatedInsights
 ├── analysis_sections: list[AnalysisSection]
 ├── executive_summary: str
+└── summary() -> str
+
+BizNode (dataclass)
+├── span_id: str
+├── session_id: str
+├── node_type: str               # "Product", "Targeting", "Campaign", "Budget"
+├── node_value: str
+├── confidence: float            # 0.0-1.0
+├── evaluated_at: datetime | None
+├── artifact_uri: str | None     # GCS URI for persisted artifacts
+└── metadata: dict
+
+WorldChangeReport (Pydantic)
+├── session_id: str
+├── alerts: list[WorldChangeAlert]
+├── total_entities_checked: int
+├── stale_entities: int
+├── is_safe_to_approve: bool
+├── check_failed: bool           # fail-closed on query/callback errors
+├── checked_at: datetime
 └── summary() -> str
 ```
 
@@ -1486,3 +1547,23 @@ The current drift detection uses keyword matching. The SQL template for semantic
 ### 14.5 Cost Attribution
 
 While `CodeEvaluator.cost_per_session()` estimates cost from token counts, deeper cost attribution (by tool, by agent, by prompt version) would enable cost optimization at the component level.
+
+### 14.6 Context Graph — Implemented (v0.2)
+
+The Context Graph module has been implemented, providing:
+- **4-Pillar Property Graph**: TechNode + BizNode + Caused edges + Evaluated cross-links
+- **BizNode extraction via AI.GENERATE** with structured `output_schema`
+- **GQL trace reconstruction** replacing recursive CTEs with quantified-path traversal
+- **World-change detection** with fail-closed semantics for HITL safety
+- **Artifact lineage** tracking via `artifact_uri` on BizNodes and cross-links
+- **MERGE with DELETE** for stale BizNode cleanup
+
+See `context_graph.py` and the `examples/context_graph_adcp_demo.ipynb` notebook.
+
+### 14.7 Context Graph Evolution
+
+Future enhancements to the Context Graph:
+- **Temporal graph versioning**: Snapshot the graph at each HITL checkpoint for audit trails
+- **Cross-session entity resolution**: Deduplicate BizNodes across sessions (e.g., "Yahoo Homepage" appearing in multiple campaigns)
+- **Graph-based anomaly detection**: Use GQL pattern matching to detect unusual execution paths
+- **Configurable fail-closed policy**: Allow callers to opt into fail-open mode for non-critical checks while keeping fail-closed as the default
