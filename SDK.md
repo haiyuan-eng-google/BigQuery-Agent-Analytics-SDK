@@ -1207,6 +1207,223 @@ print(vm.get_view_sql("TOOL_COMPLETED"))
 
 ---
 
+## 17. Context Graph (Property Graph for Agentic Ads)
+
+The **Context Graph** module builds a BigQuery Property Graph that cross-links technical execution traces (TechNodes) with business-domain entities (BizNodes). It enables GQL-based trace reconstruction, causal reasoning, and world-change detection for long-running agent tasks.
+
+### Architecture: 4-Pillar Property Graph
+
+```
+┌────────────────────┐     Caused      ┌────────────────────┐
+│    TechNode        │ ──────────────► │    BizNode         │
+│  (agent_events)    │                 │  (biz_nodes table) │
+│  span_id, agent,   │                 │  node_type,        │
+│  event_type, ...   │                 │  node_value,       │
+│                    │                 │  artifact_uri, ... │
+└────────────────────┘                 └────────┬───────────┘
+                                                │
+                                       Evaluated│
+                                                ▼
+                                       ┌────────────────────┐
+                                       │   Cross-Links      │
+                                       │  (cross_links tbl) │
+                                       │  link_type,        │
+                                       │  artifact_uri, ... │
+                                       └────────────────────┘
+```
+
+### Initialize the Context Graph Manager
+
+```python
+from bigquery_agent_analytics import ContextGraphManager, ContextGraphConfig
+
+config = ContextGraphConfig(
+    endpoint="gemini-2.5-flash",
+    graph_name="agent_context_graph",
+)
+
+cgm = ContextGraphManager(
+    project_id="my-project",
+    dataset_id="agent_analytics",
+    config=config,
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project_id` | `str` | *required* | Google Cloud project ID |
+| `dataset_id` | `str` | *required* | BigQuery dataset |
+| `table_id` | `str` | `"agent_events"` | Agent events table |
+| `config` | `ContextGraphConfig` | defaults | Graph configuration |
+| `client` | `bigquery.Client` | `None` | Injectable BQ client |
+| `location` | `str` | `"US"` | BigQuery location |
+
+### End-to-End Pipeline
+
+Build the full Context Graph in one call:
+
+```python
+results = cgm.build_context_graph(
+    session_ids=["sess-001", "sess-002"],
+    use_ai_generate=True,
+)
+
+print(f"Extracted {results['biz_nodes_count']} business entities")
+print(f"Cross-links created: {results['cross_links_created']}")
+print(f"Property Graph created: {results['property_graph_created']}")
+```
+
+### Extract Business Entities (BizNodes)
+
+Extract business-domain entities from agent traces using `AI.GENERATE` with structured `output_schema`:
+
+```python
+nodes = cgm.extract_biz_nodes(
+    session_ids=["sess-001"],
+    use_ai_generate=True,
+)
+
+for node in nodes:
+    print(f"  [{node.node_type}] {node.node_value} "
+          f"(confidence={node.confidence:.2f})")
+    if node.artifact_uri:
+        print(f"    Artifact: {node.artifact_uri}")
+```
+
+### Store & Retrieve BizNodes
+
+```python
+from bigquery_agent_analytics import BizNode
+
+# Store manually created nodes
+cgm.store_biz_nodes([
+    BizNode(
+        span_id="span-1",
+        session_id="sess-001",
+        node_type="Product",
+        node_value="Yahoo Homepage",
+        confidence=0.95,
+        artifact_uri="gs://bucket/campaign.json",
+    ),
+])
+
+# Read back
+nodes = cgm.get_biz_nodes_for_session("sess-001")
+```
+
+### Create Cross-Links & Property Graph
+
+```python
+# Create edges linking BizNodes to their source TechNodes
+cgm.create_cross_links(session_ids=["sess-001"])
+
+# Create the BigQuery Property Graph (DDL)
+cgm.create_property_graph()
+
+# Inspect the DDL
+print(cgm.get_property_graph_ddl())
+```
+
+### GQL Trace Reconstruction
+
+Reconstruct traces using native Graph Query Language instead of recursive CTEs:
+
+```python
+# GQL-based trace reconstruction (quantified-path traversal)
+trace = client.get_session_trace_gql(session_id="sess-001")
+trace.render()
+```
+
+### Causal Reasoning Queries
+
+```python
+# Get the reasoning chain for a specific decision
+chain = cgm.explain_decision(
+    decision_event_type="HITL_CONFIRMATION_REQUEST_COMPLETED",
+    biz_entity="Yahoo Homepage",
+)
+
+# Traverse causal chains via GQL
+causal = cgm.traverse_causal_chain(session_id="sess-001")
+```
+
+### World-Change Detection (HITL Safety)
+
+Detect when the real world has changed since the agent made its decisions -- critical for long-running A2A tasks with human-in-the-loop approval:
+
+```python
+def check_current_state(node):
+    """Check if a business entity is still valid."""
+    # Call your inventory API, pricing API, etc.
+    return {
+        "available": True,
+        "current_value": "in stock",
+    }
+
+report = cgm.detect_world_changes(
+    session_id="sess-001",
+    current_state_fn=check_current_state,
+)
+
+print(report.summary())
+# World Change Report - Session: sess-001
+#   Entities checked : 5
+#   Stale entities   : 0
+#   Safe to approve  : True
+```
+
+#### Fail-Closed Semantics
+
+World-change detection is **fail-closed**: if the BigQuery query or any `current_state_fn` callback fails, the report returns `check_failed=True` and `is_safe_to_approve=False`, preventing operational failures from being misreported as safe:
+
+```python
+report = cgm.detect_world_changes(session_id="sess-001")
+
+if report.check_failed:
+    print("CHECK FAILED - do not approve")
+elif not report.is_safe_to_approve:
+    print(f"DRIFT DETECTED - {report.stale_entities} stale entities")
+    for alert in report.alerts:
+        print(f"  [{alert.drift_type}] {alert.biz_node}: "
+              f"severity={alert.severity:.2f}")
+else:
+    print("Safe to approve")
+```
+
+### Data Models
+
+```
+BizNode (dataclass)
+├── span_id: str
+├── session_id: str
+├── node_type: str          # "Product", "Targeting", "Campaign", "Budget"
+├── node_value: str
+├── confidence: float       # 0.0-1.0
+├── evaluated_at: datetime | None
+├── artifact_uri: str | None  # GCS URI for persisted artifacts
+└── metadata: dict
+
+WorldChangeReport (Pydantic)
+├── session_id: str
+├── alerts: list[WorldChangeAlert]
+├── total_entities_checked: int
+├── stale_entities: int
+├── is_safe_to_approve: bool
+├── check_failed: bool      # fail-closed flag
+├── checked_at: datetime
+└── summary() -> str
+
+WorldChangeAlert (Pydantic)
+├── biz_node: str
+├── original_state: str
+├── current_state: str
+├── drift_type: str
+├── severity: float
+└── recommendation: str
+```
+
+---
+
 ## Module Architecture
 
 ```
@@ -1233,6 +1450,9 @@ bigquery_agent_analytics/
 │   ├── memory_service.py      ← Long-horizon agent memory (requires google-adk)
 │   └── bigframes_evaluator.py ← BigFrames DataFrame evaluator (optional)
 │
+│   Context Graph
+│   └── context_graph.py       ← Property Graph, BizNode extraction, GQL, world-change
+│
 │   Utilities
 │   ├── event_semantics.py     ← Canonical event type helpers & predicates
 │   └── views.py               ← Per-event-type BigQuery view management
@@ -1248,6 +1468,7 @@ Standalone modules (no internal imports):
 ├── feedback.py
 ├── ai_ml_integration.py
 ├── bigframes_evaluator.py
+├── context_graph.py
 ├── event_semantics.py
 ├── views.py
 └── eval_suite.py
@@ -1257,7 +1478,7 @@ Modules with internal imports:
 ├── grader_pipeline.py  → evaluators
 ├── multi_trial.py      → trace_evaluator
 ├── eval_validator.py   → eval_suite
-└── client.py           → evaluators, feedback, insights, trace
+└── client.py           → evaluators, feedback, insights, trace, context_graph
 
 External dependency:
 └── memory_service.py   → google-adk (memory + sessions)

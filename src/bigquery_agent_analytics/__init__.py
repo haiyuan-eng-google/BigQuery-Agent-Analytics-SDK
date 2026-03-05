@@ -282,6 +282,29 @@ except ImportError as e:
       e,
   )
 
+# Context Graph
+try:
+  from .context_graph import BizNode
+  from .context_graph import ContextGraphConfig
+  from .context_graph import ContextGraphManager
+  from .context_graph import WorldChangeAlert
+  from .context_graph import WorldChangeReport
+
+  __all__.extend(
+      [
+          "BizNode",
+          "ContextGraphConfig",
+          "ContextGraphManager",
+          "WorldChangeAlert",
+          "WorldChangeReport",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import context graph components: %s.",
+      e,
+  )
+
 # BigFrames Evaluator (optional bigframes dependency)
 try:
   from .bigframes_evaluator import BigFramesEvaluator

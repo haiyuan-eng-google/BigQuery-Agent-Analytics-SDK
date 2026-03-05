@@ -25,6 +25,8 @@ a consumption-layer toolkit for agent observability at scale.
 - **Agent Insights** -- Multi-stage pipeline for comprehensive session analysis
 - **Long-Horizon Memory** -- Cross-session context and semantic search
 - **BigQuery AI/ML Integration** -- AI.GENERATE, embeddings, anomaly detection
+- **Context Graph** -- Property Graph linking technical traces to business
+  entities, with GQL traversal, world-change detection, and artifact lineage
 
 ## Installation
 
@@ -145,6 +147,7 @@ bigquery_agent_analytics/
 ├── memory_service.py        # Long-horizon agent memory
 ├── ai_ml_integration.py     # BigQuery AI/ML capabilities
 ├── bigframes_evaluator.py   # BigFrames DataFrame evaluator
+├── context_graph.py         # Property Graph: BizNode extraction, GQL, world-change
 ├── event_semantics.py       # Canonical event type helpers & predicates
 └── views.py                 # Per-event-type BigQuery view management
 ```
