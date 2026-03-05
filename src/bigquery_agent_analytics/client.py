@@ -1720,15 +1720,18 @@ class Client:
     mgr = self.context_graph(config=config)
     rows = mgr.reconstruct_trace_gql(session_id=session_id)
 
+    # Always fetch the flat trace to capture isolated events
+    flat_trace = self.get_session_trace(session_id)
+
     if not rows:
       logger.info(
           "No GQL edges for session_id=%s (flat/sparse trace); "
-          "falling back to flat SQL query.",
+          "using flat SQL query.",
           session_id,
       )
-      return self.get_session_trace(session_id)
+      return flat_trace
 
-    # Deduplicate spans from parent/child pairs
+    # Build spans from GQL edge pairs
     seen: dict[str, dict[str, Any]] = {}
     for row in rows:
       for prefix in ("parent_", "child_"):
@@ -1751,15 +1754,17 @@ class Client:
               ),
           }
 
-    spans = [Span.from_bigquery_row(v) for v in seen.values()]
+    gql_spans = [Span.from_bigquery_row(v) for v in seen.values()]
 
-    user_id = None
-    trace_id = None
-    for s in spans:
-      if not user_id:
-        user_id = s.user_id
-      if not trace_id:
-        trace_id = s.trace_id
+    # Merge: add any flat-trace spans not already covered by GQL
+    gql_span_ids = {s.span_id for s in gql_spans if s.span_id}
+    for span in flat_trace.spans:
+      if span.span_id and span.span_id not in gql_span_ids:
+        gql_spans.append(span)
+
+    spans = gql_spans
+    user_id = flat_trace.user_id
+    trace_id = flat_trace.trace_id
 
     timestamps = [s.timestamp for s in spans if s.timestamp]
     start = min(timestamps) if timestamps else None

@@ -551,6 +551,47 @@ class TestContextGraphManager:
     assert len(received_timestamps) == 1
     assert received_timestamps[0] == eval_time
 
+  def test_get_biz_nodes_returns_artifact_uri(self):
+    mock_client = MagicMock()
+    mock_job = MagicMock()
+    mock_job.result.return_value = [
+        {
+            "biz_node_id": "s1:Product:Yahoo",
+            "span_id": "s1",
+            "session_id": "sess-1",
+            "node_type": "Product",
+            "node_value": "Yahoo",
+            "confidence": 0.95,
+            "artifact_uri": "gs://bucket/output.json",
+        },
+    ]
+    mock_client.query.return_value = mock_job
+    mgr = self._make_manager(mock_client)
+
+    nodes = mgr.get_biz_nodes_for_session("sess-1")
+    assert len(nodes) == 1
+    assert nodes[0].artifact_uri == "gs://bucket/output.json"
+
+  def test_read_biz_nodes_returns_artifact_uri(self):
+    mock_client = MagicMock()
+    mock_job = MagicMock()
+    mock_job.result.return_value = [
+        {
+            "span_id": "s1",
+            "session_id": "sess-1",
+            "node_type": "Product",
+            "node_value": "Yahoo",
+            "confidence": 0.95,
+            "artifact_uri": "gs://bucket/file.pdf",
+        },
+    ]
+    mock_client.query.return_value = mock_job
+    mgr = self._make_manager(mock_client)
+
+    nodes = mgr._read_biz_nodes(["sess-1"])
+    assert len(nodes) == 1
+    assert nodes[0].artifact_uri == "gs://bucket/file.pdf"
+
   def test_cross_link_id_uses_biz_node_id(self):
     from bigquery_agent_analytics.context_graph import (
         _INSERT_CROSS_LINKS_QUERY,
@@ -635,3 +676,71 @@ class TestClientContextGraph:
             )
             mock_flat.assert_called_once_with("sess-1")
             assert result.session_id == "sess-1"
+
+  def test_get_session_trace_gql_merges_isolated_events(self):
+    """GQL edges + flat SQL merge captures isolated events."""
+    with patch(
+        "bigquery_agent_analytics.client.bigquery.Client"
+    ):
+      from bigquery_agent_analytics.client import Client
+      from bigquery_agent_analytics.trace import Span, Trace
+
+      with patch.object(Client, "_verify_schema"):
+        client = Client(
+            project_id="p",
+            dataset_id="d",
+        )
+        ts = datetime(2025, 6, 1, 12, 0, tzinfo=timezone.utc)
+        # GQL returns one edge pair (s1 -> s2)
+        gql_rows = [
+            {
+                "parent_span_id": "s1",
+                "parent_event_type": "USER_MESSAGE_RECEIVED",
+                "parent_agent": "root",
+                "parent_timestamp": ts,
+                "session_id": "sess-1",
+                "parent_invocation_id": "inv-1",
+                "parent_content": {},
+                "parent_latency_ms": None,
+                "parent_status": "OK",
+                "parent_error_message": None,
+                "child_span_id": "s2",
+                "child_event_type": "LLM_REQUEST",
+                "child_agent": "root",
+                "child_timestamp": ts,
+                "child_invocation_id": "inv-1",
+                "child_content": {},
+                "child_latency_ms": 500,
+                "child_status": "OK",
+                "child_error_message": None,
+            },
+        ]
+        # Flat trace has s1, s2, and an isolated s3
+        flat_spans = [
+            Span(event_type="USER_MESSAGE_RECEIVED",
+                 agent="root", timestamp=ts, span_id="s1"),
+            Span(event_type="LLM_REQUEST",
+                 agent="root", timestamp=ts, span_id="s2"),
+            Span(event_type="STATE_DELTA",
+                 agent="root", timestamp=ts, span_id="s3"),
+        ]
+        flat_trace = Trace(
+            trace_id="t1", session_id="sess-1", spans=flat_spans,
+        )
+        with patch.object(
+            ContextGraphManager, "reconstruct_trace_gql",
+            return_value=gql_rows,
+        ):
+          with patch.object(
+              Client, "get_session_trace",
+              return_value=flat_trace,
+          ):
+            result = client.get_session_trace_gql(
+                session_id="sess-1"
+            )
+            span_ids = {s.span_id for s in result.spans}
+            # All three spans present: s1, s2 from GQL + s3 from flat
+            assert "s1" in span_ids
+            assert "s2" in span_ids
+            assert "s3" in span_ids
+            assert len(result.spans) == 3

@@ -510,7 +510,8 @@ SELECT
   node_value,
   confidence,
   span_id,
-  session_id
+  session_id,
+  artifact_uri
 FROM `{project}.{dataset}.{biz_table}`
 WHERE session_id = @session_id
 ORDER BY confidence DESC
@@ -710,7 +711,8 @@ class ContextGraphManager:
   ) -> list[BizNode]:
     """Reads extracted biz nodes from the output table."""
     query = f"""\
-    SELECT span_id, session_id, node_type, node_value, confidence
+    SELECT span_id, session_id, node_type, node_value, confidence,
+           artifact_uri
     FROM `{self.project_id}.{self.dataset_id}.{self.config.biz_nodes_table}`
     WHERE session_id IN UNNEST(@session_ids)
     ORDER BY confidence DESC
@@ -734,6 +736,7 @@ class ContextGraphManager:
               node_type=row.get("node_type", ""),
               node_value=row.get("node_value", ""),
               confidence=float(row.get("confidence", 1.0)),
+              artifact_uri=row.get("artifact_uri"),
           )
           for row in rows
       ]
@@ -1172,6 +1175,7 @@ class ContextGraphManager:
               node_type=row.get("node_type", ""),
               node_value=row.get("node_value", ""),
               confidence=float(row.get("confidence", 1.0)),
+              artifact_uri=row.get("artifact_uri"),
           )
           for row in rows
       ]
