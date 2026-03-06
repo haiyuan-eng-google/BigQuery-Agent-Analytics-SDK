@@ -17,7 +17,8 @@
 Creates standard (non-materialized) BigQuery views that unnest the
 generic ``agent_events`` table into per-event-type views with typed
 columns.  Every view retains the standard identity headers:
-``timestamp``, ``agent``, ``session_id``, ``invocation_id``.
+``timestamp``, ``event_type``, ``agent``, ``session_id``,
+``invocation_id``.
 
 Example usage::
 
@@ -30,7 +31,7 @@ Example usage::
     )
     vm.create_all_views()              # create all per-event views
     vm.create_view("LLM_REQUEST")      # create a single view
-    print(vm.get_view_sql("TOOL_CALL"))  # inspect SQL without creating
+    print(vm.get_view_sql("TOOL_STARTING"))  # inspect SQL without creating
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ logger = logging.getLogger("bigquery_agent_analytics." + __name__)
 
 _STANDARD_HEADERS = """\
   timestamp,
+  event_type,
   agent,
   session_id,
   invocation_id,
@@ -65,156 +67,122 @@ _STANDARD_HEADERS = """\
 # Each entry maps an event_type string to a tuple of
 # (view_suffix, extra_columns_sql).  ``extra_columns_sql`` extracts
 # event-specific fields from the ``content`` and ``attributes`` JSON
-# columns into typed top-level columns.
+# columns into typed top-level columns.  An empty string means the
+# view has only the standard headers.
 
 _EVENT_VIEW_DEFS: dict[str, tuple[str, str]] = {
+    "USER_MESSAGE_RECEIVED": (
+        "user_messages",
+        "",
+    ),
     "LLM_REQUEST": (
         "llm_requests",
         """\
-  JSON_EXTRACT_SCALAR(attributes, '$.model') AS model,
-  JSON_EXTRACT_SCALAR(attributes, '$.model_version') AS model_version,
-  JSON_EXTRACT(attributes, '$.llm_config') AS llm_config,
-  JSON_EXTRACT(attributes, '$.tools') AS tools,
-  content""",
+  JSON_VALUE(attributes, '$.model') AS model,
+  content AS request_content,
+  JSON_QUERY(attributes, '$.llm_config') AS llm_config,
+  JSON_QUERY(attributes, '$.tools') AS tools""",
     ),
     "LLM_RESPONSE": (
         "llm_responses",
         """\
-  JSON_EXTRACT_SCALAR(attributes, '$.model') AS model,
-  JSON_EXTRACT_SCALAR(
-    attributes, '$.usage_metadata.prompt_token_count'
-  ) AS prompt_tokens,
-  JSON_EXTRACT_SCALAR(
-    attributes, '$.usage_metadata.candidates_token_count'
-  ) AS candidate_tokens,
-  JSON_EXTRACT_SCALAR(
-    attributes, '$.usage_metadata.total_token_count'
-  ) AS total_tokens,
-  JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS total_ms,
-  JSON_EXTRACT_SCALAR(
+  JSON_QUERY(content, '$.response') AS response,
+  CAST(JSON_VALUE(content, '$.usage.prompt') AS INT64) AS usage_prompt_tokens,
+  CAST(JSON_VALUE(content, '$.usage.completion') AS INT64) AS usage_completion_tokens,
+  CAST(JSON_VALUE(content, '$.usage.total') AS INT64) AS usage_total_tokens,
+  CAST(JSON_VALUE(latency_ms, '$.total_ms') AS INT64) AS total_ms,
+  CAST(JSON_VALUE(
     latency_ms, '$.time_to_first_token_ms'
-  ) AS time_to_first_token_ms,
-  content""",
+  ) AS INT64) AS ttft_ms,
+  JSON_VALUE(attributes, '$.model_version') AS model_version,
+  JSON_QUERY(attributes, '$.usage_metadata') AS usage_metadata""",
     ),
     "LLM_ERROR": (
         "llm_errors",
         """\
-  JSON_EXTRACT_SCALAR(attributes, '$.model') AS model,
-  error_message,
-  JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS total_ms,
-  content""",
+  CAST(JSON_VALUE(latency_ms, '$.total_ms') AS INT64) AS total_ms""",
     ),
     "TOOL_STARTING": (
         "tool_starts",
         """\
-  JSON_EXTRACT_SCALAR(content, '$.tool') AS tool_name,
-  JSON_EXTRACT_SCALAR(content, '$.tool_origin') AS tool_origin,
-  JSON_EXTRACT(content, '$.args') AS tool_args""",
+  JSON_VALUE(content, '$.tool') AS tool_name,
+  JSON_QUERY(content, '$.args') AS tool_args,
+  JSON_VALUE(content, '$.tool_origin') AS tool_origin""",
     ),
     "TOOL_COMPLETED": (
         "tool_completions",
         """\
-  JSON_EXTRACT_SCALAR(content, '$.tool') AS tool_name,
-  JSON_EXTRACT_SCALAR(content, '$.tool_origin') AS tool_origin,
-  JSON_EXTRACT(content, '$.result') AS tool_result,
-  JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS total_ms""",
+  JSON_VALUE(content, '$.tool') AS tool_name,
+  JSON_QUERY(content, '$.result') AS tool_result,
+  JSON_VALUE(content, '$.tool_origin') AS tool_origin,
+  CAST(JSON_VALUE(latency_ms, '$.total_ms') AS INT64) AS total_ms""",
     ),
     "TOOL_ERROR": (
         "tool_errors",
         """\
-  JSON_EXTRACT_SCALAR(content, '$.tool') AS tool_name,
-  JSON_EXTRACT_SCALAR(content, '$.tool_origin') AS tool_origin,
-  JSON_EXTRACT(content, '$.args') AS tool_args,
-  error_message,
-  JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS total_ms""",
-    ),
-    "USER_MESSAGE_RECEIVED": (
-        "user_messages",
-        """\
-  JSON_EXTRACT_SCALAR(content, '$.text_summary') AS text_summary,
-  content""",
+  JSON_VALUE(content, '$.tool') AS tool_name,
+  JSON_QUERY(content, '$.args') AS tool_args,
+  JSON_VALUE(content, '$.tool_origin') AS tool_origin,
+  CAST(JSON_VALUE(latency_ms, '$.total_ms') AS INT64) AS total_ms""",
     ),
     "AGENT_STARTING": (
         "agent_starts",
         """\
-  JSON_EXTRACT_SCALAR(
-    attributes, '$.root_agent_name'
-  ) AS root_agent_name,
-  content""",
+  JSON_VALUE(content, '$.text_summary') AS agent_instruction""",
     ),
     "AGENT_COMPLETED": (
         "agent_completions",
         """\
-  JSON_EXTRACT_SCALAR(
-    attributes, '$.root_agent_name'
-  ) AS root_agent_name,
-  JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS total_ms,
-  content""",
+  CAST(JSON_VALUE(latency_ms, '$.total_ms') AS INT64) AS total_ms""",
     ),
     "INVOCATION_STARTING": (
         "invocation_starts",
-        """\
-  JSON_EXTRACT_SCALAR(
-    attributes, '$.root_agent_name'
-  ) AS root_agent_name,
-  content""",
+        "",
     ),
     "INVOCATION_COMPLETED": (
         "invocation_completions",
-        """\
-  JSON_EXTRACT_SCALAR(
-    attributes, '$.root_agent_name'
-  ) AS root_agent_name,
-  JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS total_ms,
-  content""",
+        "",
     ),
     "STATE_DELTA": (
         "state_deltas",
         """\
-  JSON_EXTRACT(attributes, '$.state_delta') AS state_delta,
-  content""",
+  JSON_QUERY(attributes, '$.state_delta') AS state_delta""",
     ),
     "HITL_CREDENTIAL_REQUEST": (
         "hitl_credential_requests",
         """\
-  JSON_EXTRACT_SCALAR(content, '$.tool') AS tool_name,
-  JSON_EXTRACT(content, '$.args') AS tool_args,
-  content""",
+  JSON_VALUE(content, '$.tool') AS tool_name,
+  JSON_QUERY(content, '$.args') AS tool_args""",
     ),
     "HITL_CONFIRMATION_REQUEST": (
         "hitl_confirmation_requests",
         """\
-  JSON_EXTRACT_SCALAR(content, '$.tool') AS tool_name,
-  JSON_EXTRACT(content, '$.args') AS tool_args,
-  content""",
+  JSON_VALUE(content, '$.tool') AS tool_name,
+  JSON_QUERY(content, '$.args') AS tool_args""",
     ),
     "HITL_INPUT_REQUEST": (
         "hitl_input_requests",
         """\
-  JSON_EXTRACT_SCALAR(content, '$.tool') AS tool_name,
-  JSON_EXTRACT(content, '$.args') AS tool_args,
-  content""",
+  JSON_VALUE(content, '$.tool') AS tool_name,
+  JSON_QUERY(content, '$.args') AS tool_args""",
     ),
     "HITL_CREDENTIAL_REQUEST_COMPLETED": (
         "hitl_credential_completions",
         """\
-  JSON_EXTRACT_SCALAR(content, '$.tool') AS tool_name,
-  JSON_EXTRACT(content, '$.result') AS tool_result,
-  content""",
+  JSON_VALUE(content, '$.tool') AS tool_name,
+  JSON_QUERY(content, '$.result') AS tool_result""",
     ),
     "HITL_CONFIRMATION_REQUEST_COMPLETED": (
         "hitl_confirmation_completions",
         """\
-  JSON_EXTRACT_SCALAR(content, '$.tool') AS tool_name,
-  JSON_EXTRACT(content, '$.result') AS tool_result,
-  content""",
+  JSON_VALUE(content, '$.tool') AS tool_name,
+  JSON_QUERY(content, '$.result') AS tool_result""",
     ),
     "HITL_INPUT_REQUEST_COMPLETED": (
         "hitl_input_completions",
         """\
-  JSON_EXTRACT_SCALAR(content, '$.tool') AS tool_name,
-  JSON_EXTRACT(content, '$.result') AS tool_result,
-  content""",
+  JSON_VALUE(content, '$.tool') AS tool_name,
+  JSON_QUERY(content, '$.result') AS tool_result""",
     ),
 }
 
@@ -225,8 +193,7 @@ _EVENT_VIEW_DEFS: dict[str, tuple[str, str]] = {
 _VIEW_SQL_TEMPLATE = """\
 CREATE OR REPLACE VIEW `{project}.{dataset}.{view_name}` AS
 SELECT
-{standard_headers},
-{extra_columns}
+{select_clause}
 FROM `{project}.{dataset}.{table}`
 WHERE event_type = '{event_type}'
 """
@@ -241,14 +208,17 @@ def _build_view_sql(
     extra_columns: str,
 ) -> str:
   """Builds the CREATE OR REPLACE VIEW SQL for one event type."""
+  if extra_columns:
+    select_clause = f"{_STANDARD_HEADERS},\n{extra_columns}"
+  else:
+    select_clause = _STANDARD_HEADERS
   return _VIEW_SQL_TEMPLATE.format(
       project=project,
       dataset=dataset,
       table=table,
       view_name=view_name,
       event_type=event_type,
-      standard_headers=_STANDARD_HEADERS,
-      extra_columns=extra_columns,
+      select_clause=select_clause,
   )
 
 

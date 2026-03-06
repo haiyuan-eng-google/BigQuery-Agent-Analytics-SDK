@@ -41,9 +41,16 @@ class TestViewManager:
   def test_available_event_types(self, vm):
     types = vm.available_event_types
     assert "LLM_REQUEST" in types
+    assert "LLM_RESPONSE" in types
+    assert "LLM_ERROR" in types
     assert "TOOL_STARTING" in types
     assert "TOOL_COMPLETED" in types
     assert "TOOL_ERROR" in types
+    assert "USER_MESSAGE_RECEIVED" in types
+    assert "AGENT_STARTING" in types
+    assert "AGENT_COMPLETED" in types
+    assert "INVOCATION_STARTING" in types
+    assert "INVOCATION_COMPLETED" in types
     assert "STATE_DELTA" in types
     assert "HITL_CREDENTIAL_REQUEST" in types
     assert "HITL_CONFIRMATION_REQUEST" in types
@@ -67,17 +74,19 @@ class TestViewManager:
     sql = vm.get_view_sql("TOOL_STARTING")
     for header in [
         "timestamp",
+        "event_type",
         "agent",
         "session_id",
         "invocation_id",
         "span_id",
+        "is_truncated",
     ]:
       assert header in sql
 
   def test_get_view_sql_llm_request_columns(self, vm):
     sql = vm.get_view_sql("LLM_REQUEST")
     assert "model" in sql
-    assert "model_version" in sql
+    assert "request_content" in sql
     assert "llm_config" in sql
 
   def test_get_view_sql_tool_starting_columns(self, vm):
@@ -94,9 +103,28 @@ class TestViewManager:
 
   def test_get_view_sql_llm_response_tokens(self, vm):
     sql = vm.get_view_sql("LLM_RESPONSE")
-    assert "prompt_tokens" in sql
-    assert "candidate_tokens" in sql
-    assert "total_tokens" in sql
+    assert "usage_prompt_tokens" in sql
+    assert "usage_completion_tokens" in sql
+    assert "usage_total_tokens" in sql
+    assert "ttft_ms" in sql
+    assert "model_version" in sql
+    assert "usage_metadata" in sql
+
+  def test_get_view_sql_event_type_in_headers(self, vm):
+    """Every view includes event_type in the standard headers."""
+    sql = vm.get_view_sql("TOOL_STARTING")
+    assert "event_type" in sql
+
+  def test_get_view_sql_empty_extra_columns(self, vm):
+    """Views with no extra columns produce valid SQL."""
+    sql = vm.get_view_sql("USER_MESSAGE_RECEIVED")
+    assert "CREATE OR REPLACE VIEW" in sql
+    assert "event_type = 'USER_MESSAGE_RECEIVED'" in sql
+    # Should NOT have a trailing comma before FROM
+    lines = sql.split("\n")
+    from_idx = next(i for i, line in enumerate(lines) if "FROM" in line)
+    pre_from = lines[from_idx - 1].strip()
+    assert not pre_from.endswith(","), f"Trailing comma before FROM: {pre_from}"
 
   def test_get_view_sql_unknown_event_raises(self, vm):
     with pytest.raises(KeyError, match="Unknown event_type"):
