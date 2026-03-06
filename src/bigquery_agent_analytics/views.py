@@ -166,6 +166,24 @@ _EVENT_VIEW_DEFS: dict[str, tuple[str, str]] = {
   JSON_VALUE(content, '$.tool') AS tool_name,
   JSON_QUERY(content, '$.args') AS tool_args""",
     ),
+    "HITL_CREDENTIAL_REQUEST_COMPLETED": (
+        "hitl_credential_completions",
+        """\
+  JSON_VALUE(content, '$.tool') AS tool_name,
+  JSON_QUERY(content, '$.result') AS tool_result""",
+    ),
+    "HITL_CONFIRMATION_REQUEST_COMPLETED": (
+        "hitl_confirmation_completions",
+        """\
+  JSON_VALUE(content, '$.tool') AS tool_name,
+  JSON_QUERY(content, '$.result') AS tool_result""",
+    ),
+    "HITL_INPUT_REQUEST_COMPLETED": (
+        "hitl_input_completions",
+        """\
+  JSON_VALUE(content, '$.tool') AS tool_name,
+  JSON_QUERY(content, '$.result') AS tool_result""",
+    ),
 }
 
 # ------------------------------------------------------------------ #

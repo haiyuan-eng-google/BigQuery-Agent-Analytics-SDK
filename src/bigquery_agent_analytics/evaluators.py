@@ -34,9 +34,7 @@ Example usage::
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
-from dataclasses import field
 from datetime import datetime
 from datetime import timezone
 import json

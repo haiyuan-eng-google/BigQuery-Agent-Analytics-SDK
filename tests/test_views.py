@@ -55,6 +55,9 @@ class TestViewManager:
     assert "HITL_CREDENTIAL_REQUEST" in types
     assert "HITL_CONFIRMATION_REQUEST" in types
     assert "HITL_INPUT_REQUEST" in types
+    assert "HITL_CREDENTIAL_REQUEST_COMPLETED" in types
+    assert "HITL_CONFIRMATION_REQUEST_COMPLETED" in types
+    assert "HITL_INPUT_REQUEST_COMPLETED" in types
     assert len(types) == len(_EVENT_VIEW_DEFS)
 
   def test_get_view_name(self, vm):
@@ -119,7 +122,7 @@ class TestViewManager:
     assert "event_type = 'USER_MESSAGE_RECEIVED'" in sql
     # Should NOT have a trailing comma before FROM
     lines = sql.split("\n")
-    from_idx = next(i for i, l in enumerate(lines) if "FROM" in l)
+    from_idx = next(i for i, line in enumerate(lines) if "FROM" in line)
     pre_from = lines[from_idx - 1].strip()
     assert not pre_from.endswith(","), f"Trailing comma before FROM: {pre_from}"
 
