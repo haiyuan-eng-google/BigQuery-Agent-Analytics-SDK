@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Decision Semantics - Context Graph V3</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Google Sans', 'Roboto', sans-serif; background: #f8f9fa; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #f1f1f1; }
+    ::-webkit-scrollbar-thumb { background: #dadce0; border-radius: 4px; }
+    code { font-family: 'Roboto Mono', monospace; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-in { animation: fadeIn 0.3s ease-out; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState } = React;
+
+const C = {
+  blue: { 50: '#e8f0fe', 100: '#d2e3fc', 200: '#aecbfa', 500: '#1a73e8', 600: '#1967d2', 700: '#185abc' },
+  green: { 50: '#e6f4ea', 100: '#ceead6', 500: '#34a853', 600: '#1e8e3e' },
+  yellow: { 50: '#fef7e0', 100: '#feefc3', 500: '#fbbc04', 600: '#f9ab00' },
+  red: { 50: '#fce8e6', 100: '#fad2cf', 500: '#ea4335', 600: '#d93025' },
+  purple: { 50: '#f3e8fd', 100: '#e9d5ff', 500: '#9334e6' },
+  orange: { 50: '#feefe3', 500: '#ff6d01' },
+  cyan: { 50: '#e4f7fb', 500: '#00bcd4' },
+  teal: { 50: '#e0f2f1', 500: '#009688' },
+  grey: { 50: '#f8f9fa', 100: '#f1f3f4', 200: '#e8eaed', 300: '#dadce0', 400: '#bdc1c6', 500: '#5f6368', 600: '#80868b', 700: '#3c4043', 800: '#303134', 900: '#202124' },
+};
+
+// ============================================================
+// Demo Session Data — Decision Semantics Scenario
+// ============================================================
+
+const DEMO_SESSIONS = [
+  {
+    id: 'sess-nike-audience-selection',
+    client: 'Nike',
+    campaign: 'Summer 2026 Campaign',
+    budget: '$200,000',
+    scenario: 'Agent evaluates 3 audience segments, selects 1, drops 2 due to budget constraints',
+    events: [
+      { span_id: 'n1', parent_span_id: null, event_type: 'USER_MESSAGE_RECEIVED', agent: 'root_agent', timestamp: '2026-01-19T11:00:00Z', content: { text: 'Launch $200K summer campaign for Nike targeting athletes and fitness enthusiasts' } },
+      { span_id: 'n2', parent_span_id: 'n1', event_type: 'AGENT_STARTING', agent: 'audience_optimizer', timestamp: '2026-01-19T11:00:01Z', content: { text_summary: 'Delegating to audience_optimizer sub-agent for audience selection' } },
+      { span_id: 'n3', parent_span_id: 'n2', event_type: 'TOOL_STARTING', agent: 'audience_optimizer', timestamp: '2026-01-19T11:00:02Z', content: { tool: 'evaluate_audience_segments' } },
+      { span_id: 'n4', parent_span_id: 'n3', event_type: 'TOOL_COMPLETED', agent: 'audience_optimizer', timestamp: '2026-01-19T11:00:05Z', content: {
+        tool: 'evaluate_audience_segments',
+        result: {
+          candidates: [
+            { segment: 'Athletes 18-35', reach: 12500000, cpm: 8.50, match_score: 0.91, estimated_cost: 106250 },
+            { segment: 'Fitness Enthusiasts', reach: 8200000, cpm: 12.00, match_score: 0.78, estimated_cost: 98400 },
+            { segment: 'Running Community', reach: 3100000, cpm: 15.00, match_score: 0.65, estimated_cost: 46500 }
+          ]
+        }
+      }},
+      { span_id: 'n5', parent_span_id: 'n2', event_type: 'TOOL_STARTING', agent: 'audience_optimizer', timestamp: '2026-01-19T11:00:06Z', content: { tool: 'rank_and_select_audiences' } },
+      { span_id: 'n6', parent_span_id: 'n5', event_type: 'TOOL_COMPLETED', agent: 'audience_optimizer', timestamp: '2026-01-19T11:00:08Z', content: {
+        tool: 'rank_and_select_audiences',
+        result: {
+          decision: 'select_primary_audience',
+          rationale: 'Budget-constrained optimization: selected highest match_score segment within budget ceiling. Combined cost of all 3 ($251,150) exceeds $200K budget.',
+          selected: 'Athletes 18-35',
+          dropped: ['Fitness Enthusiasts', 'Running Community']
+        }
+      }},
+      { span_id: 'n7', parent_span_id: 'n2', event_type: 'TOOL_STARTING', agent: 'audience_optimizer', timestamp: '2026-01-19T11:00:09Z', content: { tool: 'allocate_budget' } },
+      { span_id: 'n8', parent_span_id: 'n7', event_type: 'TOOL_COMPLETED', agent: 'audience_optimizer', timestamp: '2026-01-19T11:00:11Z', content: {
+        tool: 'allocate_budget',
+        result: { allocation: { 'Athletes 18-35': 200000 }, remaining_budget: 0 }
+      }},
+      { span_id: 'n9', parent_span_id: 'n1', event_type: 'HITL_CONFIRMATION_REQUEST', agent: 'root_agent', timestamp: '2026-01-19T11:00:13Z', content: {
+        text: 'Audience selection complete for Nike Summer 2026. Selected: Athletes 18-35 ($200K). Dropped: Fitness Enthusiasts (budget), Running Community (budget + low reach). Awaiting approval.'
+      }},
+      { span_id: 'n10', parent_span_id: 'n9', event_type: 'HITL_CONFIRMATION_REQUEST_COMPLETED', agent: 'root_agent', timestamp: '2026-01-19T11:02:00Z', content: { result: 'approved' } },
+    ],
+    bizNodes: [
+      { node_type: 'Audience', node_value: 'Athletes 18-35', confidence: 0.91 },
+      { node_type: 'Audience', node_value: 'Fitness Enthusiasts', confidence: 0.78 },
+      { node_type: 'Audience', node_value: 'Running Community', confidence: 0.65 },
+      { node_type: 'Budget', node_value: '$200,000', confidence: 0.99 },
+      { node_type: 'Campaign', node_value: 'Nike Summer 2026', confidence: 0.97 },
+    ],
+    decisionPoints: [
+      {
+        decision_id: 'dp-n6',
+        span_id: 'n6',
+        decision_type: 'audience_selection',
+        rationale: 'Budget-constrained optimization: selected highest match_score segment within budget ceiling. Combined cost of all 3 segments ($251,150) exceeds $200K budget.',
+        candidates: [
+          { candidate_value: 'Athletes 18-35', score: 0.91, is_selected: true, rejection_reason: null },
+          { candidate_value: 'Fitness Enthusiasts', score: 0.78, is_selected: false, rejection_reason: 'Budget constraint: combined cost ($204,650) exceeds $200K ceiling. Lower match_score (0.78 vs 0.91) makes this secondary priority.' },
+          { candidate_value: 'Running Community', score: 0.65, is_selected: false, rejection_reason: 'Budget constraint and low reach: 3.1M reach vs 12.5M for primary segment. Match score below 0.70 threshold.' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'sess-elf-placement-selection',
+    client: 'ELF Cosmetics',
+    campaign: 'Gen Z Beauty Campaign',
+    budget: '$50,000',
+    scenario: 'Agent evaluates 4 ad placements, selects 2, drops 2 due to audience mismatch',
+    events: [
+      { span_id: 'e1', parent_span_id: null, event_type: 'USER_MESSAGE_RECEIVED', agent: 'root_agent', timestamp: '2026-01-20T09:00:00Z', content: { text: 'Plan $50K digital campaign for ELF Cosmetics targeting Gen Z beauty enthusiasts' } },
+      { span_id: 'e2', parent_span_id: 'e1', event_type: 'AGENT_STARTING', agent: 'placement_optimizer', timestamp: '2026-01-20T09:00:01Z', content: { text_summary: 'Evaluating ad placements for Gen Z audience' } },
+      { span_id: 'e3', parent_span_id: 'e2', event_type: 'TOOL_COMPLETED', agent: 'placement_optimizer', timestamp: '2026-01-20T09:00:04Z', content: {
+        tool: 'evaluate_placements',
+        result: {
+          candidates: [
+            { placement: 'Instagram Reels', gen_z_affinity: 0.95, cpm: 6.50 },
+            { placement: 'TikTok TopView', gen_z_affinity: 0.93, cpm: 9.00 },
+            { placement: 'LinkedIn Sponsored', gen_z_affinity: 0.22, cpm: 14.00 },
+            { placement: 'Yahoo Homepage', gen_z_affinity: 0.31, cpm: 11.00 },
+          ]
+        }
+      }},
+      { span_id: 'e4', parent_span_id: 'e2', event_type: 'TOOL_COMPLETED', agent: 'placement_optimizer', timestamp: '2026-01-20T09:00:07Z', content: {
+        tool: 'select_placements',
+        result: {
+          decision: 'select_gen_z_placements',
+          rationale: 'Selected placements with gen_z_affinity >= 0.70. LinkedIn and Yahoo dropped for audience mismatch.',
+          selected: ['Instagram Reels', 'TikTok TopView'],
+          dropped: ['LinkedIn Sponsored', 'Yahoo Homepage']
+        }
+      }},
+      { span_id: 'e5', parent_span_id: 'e1', event_type: 'HITL_CONFIRMATION_REQUEST', agent: 'root_agent', timestamp: '2026-01-20T09:00:09Z', content: { text: 'Placement selection for ELF Cosmetics. Selected: Instagram Reels + TikTok TopView. Awaiting approval.' } },
+      { span_id: 'e6', parent_span_id: 'e5', event_type: 'HITL_CONFIRMATION_REQUEST_COMPLETED', agent: 'root_agent', timestamp: '2026-01-20T09:01:00Z', content: { result: 'approved' } },
+    ],
+    bizNodes: [
+      { node_type: 'Placement', node_value: 'Instagram Reels', confidence: 0.95 },
+      { node_type: 'Placement', node_value: 'TikTok TopView', confidence: 0.93 },
+      { node_type: 'Placement', node_value: 'LinkedIn Sponsored', confidence: 0.22 },
+      { node_type: 'Placement', node_value: 'Yahoo Homepage', confidence: 0.31 },
+      { node_type: 'Budget', node_value: '$50,000', confidence: 0.99 },
+    ],
+    decisionPoints: [
+      {
+        decision_id: 'dp-e4',
+        span_id: 'e4',
+        decision_type: 'placement_selection',
+        rationale: 'Selected placements with gen_z_affinity >= 0.70 threshold. LinkedIn (0.22) and Yahoo (0.31) dropped for audience mismatch — Gen Z audience share too low for campaign objectives.',
+        candidates: [
+          { candidate_value: 'Instagram Reels', score: 0.95, is_selected: true, rejection_reason: null },
+          { candidate_value: 'TikTok TopView', score: 0.93, is_selected: true, rejection_reason: null },
+          { candidate_value: 'LinkedIn Sponsored', score: 0.22, is_selected: false, rejection_reason: 'Gen Z affinity 0.22 — below 0.70 threshold. LinkedIn skews professional/35+ demographic.' },
+          { candidate_value: 'Yahoo Homepage', score: 0.31, is_selected: false, rejection_reason: 'Gen Z affinity 0.31 — below 0.70 threshold. Yahoo audience skews older demographic.' },
+        ],
+      },
+    ],
+  },
+];
+
+// ============================================================
+// SQL Templates — Context Graph V3: Decision Semantics
+// ============================================================
+
+const SQL_TEMPLATES = {
+  extendedOutputSchema: {
+    name: 'Extended AI.GENERATE output_schema',
+    category: 'Extraction',
+    sql: `-- Extended output_schema for decision semantics extraction
+-- Prompts Gemini to extract not just entities, but full decision context
+
+MERGE \`project.dataset.decision_nodes\` AS target
+USING (
+  SELECT
+    CONCAT('dp-', base.span_id) AS decision_id,
+    base.span_id,
+    base.session_id,
+    JSON_EXTRACT_SCALAR(decision, '$.decision_type') AS decision_type,
+    JSON_EXTRACT_SCALAR(decision, '$.decision_rationale') AS rationale,
+    JSON_EXTRACT_ARRAY(decision, '$.candidates_evaluated') AS candidates_json
+  FROM \`project.dataset.agent_events\` AS base,
+  UNNEST([
+    AI.GENERATE(
+      CONCAT(
+        'Analyze this agent action and extract the decision context. ',
+        'Identify: what decision was made, why, and what alternatives ',
+        'were considered and rejected.',
+        '\\n\\nPayload:\\n',
+        TO_JSON_STRING(base.content)
+      ),
+      endpoint => 'gemini-2.5-flash',
+      output_schema => '{
+        "type": "OBJECT",
+        "properties": {
+          "decision_type": {"type": "STRING"},
+          "decision_rationale": {"type": "STRING"},
+          "candidates_evaluated": {
+            "type": "ARRAY",
+            "items": {
+              "type": "OBJECT",
+              "properties": {
+                "candidate_value": {"type": "STRING"},
+                "score": {"type": "NUMBER"},
+                "is_selected": {"type": "BOOLEAN"},
+                "rejection_reason": {"type": "STRING"}
+              }
+            }
+          }
+        }
+      }'
+    )
+  ]) AS decision
+  WHERE base.session_id IN UNNEST(@session_ids)
+    AND base.event_type = 'TOOL_COMPLETED'
+    AND JSON_EXTRACT_SCALAR(base.content, '$.result.decision') IS NOT NULL
+) AS source
+ON target.decision_id = source.decision_id
+WHEN MATCHED THEN
+  UPDATE SET rationale = source.rationale
+WHEN NOT MATCHED BY TARGET THEN
+  INSERT (decision_id, span_id, session_id, decision_type, rationale)
+  VALUES (source.decision_id, source.span_id, source.session_id,
+          source.decision_type, source.rationale)`,
+  },
+  createTables: {
+    name: 'Decision & Candidate Tables DDL',
+    category: 'Schema',
+    sql: `-- Table 1: DecisionPoint nodes
+CREATE TABLE IF NOT EXISTS \`project.dataset.decision_points\` (
+  decision_id STRING,              -- Primary key
+  session_id STRING,
+  span_id STRING,                  -- Links to TechNode that made the decision
+  decision_type STRING,            -- e.g. "audience_selection", "placement_selection"
+  description STRING               -- Decision description
+);
+
+-- Table 2: Candidate nodes
+CREATE TABLE IF NOT EXISTS \`project.dataset.candidates\` (
+  candidate_id STRING,             -- Primary key
+  decision_id STRING,              -- Links to DecisionPoint
+  session_id STRING,
+  name STRING,                     -- Candidate name (e.g. "Athletes 18-35")
+  score FLOAT64,                   -- Evaluation score (0.0-1.0)
+  status STRING,                   -- "SELECTED" or "DROPPED"
+  rejection_rationale STRING       -- EU audit: why was this candidate dropped?
+);
+
+-- Table 3: MadeDecision edges (TechNode -> DecisionPoint)
+CREATE TABLE IF NOT EXISTS \`project.dataset.made_decision_edges\` (
+  edge_id STRING,
+  span_id STRING,                  -- Source: TechNode
+  decision_id STRING,              -- Destination: DecisionPoint
+  created_at TIMESTAMP
+);
+
+-- Table 4: CandidateEdge edges (DecisionPoint -> CandidateNode)
+CREATE TABLE IF NOT EXISTS \`project.dataset.candidate_edges\` (
+  edge_id STRING,
+  decision_id STRING,              -- Source: DecisionPoint
+  candidate_id STRING,             -- Destination: CandidateNode
+  edge_type STRING,                -- "SELECTED_CANDIDATE" or "DROPPED_CANDIDATE"
+  rejection_rationale STRING,      -- EU audit: why was this candidate dropped?
+  created_at TIMESTAMP
+);`,
+  },
+  propertyGraphDDL: {
+    name: 'Extended Property Graph DDL',
+    category: 'Graph',
+    sql: `-- Extended Property Graph with Decision Semantics (6-pillar)
+-- Adds DecisionPoint + CandidateNode tables, MadeDecision + CandidateEdge edges
+CREATE OR REPLACE PROPERTY GRAPH \`project.dataset.agent_context_graph\`
+  NODE TABLES (
+    -- Pillar 1: Technical execution nodes (from ADK plugin)
+    \`project.dataset.agent_events\` AS TechNode
+      KEY (span_id) LABEL TechNode
+      PROPERTIES (event_type, agent, timestamp, session_id, content, status),
+
+    -- Pillar 2: Business domain nodes (AI.GENERATE extracted)
+    \`project.dataset.extracted_biz_nodes\` AS BizNode
+      KEY (biz_node_id) LABEL BizNode
+      PROPERTIES (node_type, node_value, confidence, session_id, artifact_uri),
+
+    -- Pillar 5: Decision point nodes
+    \`project.dataset.decision_points\` AS DecisionPoint
+      KEY (decision_id) LABEL DecisionPoint
+      PROPERTIES (session_id, span_id, decision_type, description),
+
+    -- Pillar 6: Candidate nodes
+    \`project.dataset.candidates\` AS CandidateNode
+      KEY (candidate_id) LABEL CandidateNode
+      PROPERTIES (decision_id, session_id, name, score, status, rejection_rationale)
+  )
+  EDGE TABLES (
+    -- Causal lineage: parent span -> child span
+    \`project.dataset.agent_events\` AS Caused
+      KEY (span_id)
+      SOURCE KEY (parent_span_id) REFERENCES TechNode (span_id)
+      DESTINATION KEY (span_id) REFERENCES TechNode (span_id)
+      LABEL Caused,
+
+    -- Cross-link: tech event -> business entity
+    \`project.dataset.context_cross_links\` AS Evaluated
+      KEY (link_id)
+      SOURCE KEY (span_id) REFERENCES TechNode (span_id)
+      DESTINATION KEY (biz_node_id) REFERENCES BizNode (biz_node_id)
+      LABEL Evaluated
+      PROPERTIES (artifact_uri, link_type, created_at),
+
+    -- TechNode -> DecisionPoint (span that made the decision)
+    \`project.dataset.made_decision_edges\` AS MadeDecision
+      KEY (edge_id)
+      SOURCE KEY (span_id) REFERENCES TechNode (span_id)
+      DESTINATION KEY (decision_id) REFERENCES DecisionPoint (decision_id)
+      LABEL MadeDecision,
+
+    -- DecisionPoint -> CandidateNode (selected or dropped)
+    \`project.dataset.candidate_edges\` AS CandidateEdge
+      KEY (edge_id)
+      SOURCE KEY (decision_id) REFERENCES DecisionPoint (decision_id)
+      DESTINATION KEY (candidate_id) REFERENCES CandidateNode (candidate_id)
+      LABEL CandidateEdge
+      PROPERTIES (edge_type, rejection_rationale, created_at)
+  )`,
+  },
+  gqlAuditTrail: {
+    name: 'GQL: "Why was X shown instead of Y?" (EU Audit)',
+    category: 'Graph',
+    sql: `-- EU Regulatory Audit Query:
+-- "Why was Athletes 18-35 selected instead of Fitness Enthusiasts?"
+-- Traces: TechNode -> MadeDecision -> DecisionPoint -> CandidateEdge -> CandidateNode
+
+GRAPH \`project.dataset.agent_context_graph\`
+MATCH
+  (step:TechNode)-[md:MadeDecision]->(dp:DecisionPoint)
+    -[ce:CandidateEdge]->(cand:CandidateNode)
+WHERE dp.session_id = @session_id
+RETURN
+  dp.decision_id,
+  dp.decision_type,
+  dp.description AS decision_description,
+  cand.name AS candidate_name,
+  cand.score AS candidate_score,
+  cand.status AS candidate_status,
+  cand.rejection_rationale,
+  ce.edge_type,
+  step.span_id,
+  step.event_type,
+  step.agent
+ORDER BY dp.decision_id, cand.score DESC`,
+  },
+  gqlDroppedOnly: {
+    name: 'GQL: All Dropped Candidates with Rationale',
+    category: 'Graph',
+    sql: `-- Query for compliance: retrieve ALL dropped candidates and their rationale
+-- Answers: "Show me every candidate that was rejected and explain why"
+
+GRAPH \`project.dataset.agent_context_graph\`
+MATCH
+  (dp:DecisionPoint)-[ce:CandidateEdge]->(cand:CandidateNode)
+WHERE dp.session_id = @session_id
+  AND ce.edge_type = 'DROPPED_CANDIDATE'
+RETURN
+  dp.decision_id,
+  dp.decision_type,
+  dp.description AS decision_description,
+  cand.name AS candidate_name,
+  cand.score AS candidate_score,
+  cand.rejection_rationale
+ORDER BY dp.decision_id, cand.score DESC`,
+  },
+};
+
+// ============================================================
+// UI Components
+// ============================================================
+
+const Tab = ({ active, onClick, icon, children }) => (
+  <button onClick={onClick} style={{
+    display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px',
+    border: 'none', borderBottom: active ? `3px solid ${C.blue[500]}` : '3px solid transparent',
+    background: 'transparent', color: active ? C.blue[500] : C.grey[500],
+    fontWeight: active ? 600 : 400, fontSize: '14px', cursor: 'pointer', transition: 'all 0.2s', whiteSpace: 'nowrap',
+  }}><span style={{ fontSize: '16px' }}>{icon}</span>{children}</button>
+);
+
+const Card = ({ children, title, subtitle, style = {}, headerAction, noPadding }) => (
+  <div style={{ background: 'white', borderRadius: '8px', boxShadow: '0 1px 2px rgba(60,64,67,0.1), 0 1px 3px rgba(60,64,67,0.08)', ...style }}>
+    {(title || headerAction) && (
+      <div style={{ padding: '16px 20px', borderBottom: `1px solid ${C.grey[200]}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          {title && <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 500, color: C.grey[900] }}>{title}</h3>}
+          {subtitle && <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: C.grey[500] }}>{subtitle}</p>}
+        </div>
+        {headerAction}
+      </div>
+    )}
+    <div style={{ padding: noPadding ? 0 : (title ? '16px 20px' : '0') }}>{children}</div>
+  </div>
+);
+
+const Badge = ({ color = 'blue', children, onClick }) => {
+  const cm = { blue: { bg: C.blue[50], text: C.blue[500] }, green: { bg: C.green[50], text: C.green[500] }, yellow: { bg: C.yellow[50], text: C.yellow[600] }, red: { bg: C.red[50], text: C.red[500] }, purple: { bg: C.purple[50], text: C.purple[500] }, grey: { bg: C.grey[100], text: C.grey[700] }, orange: { bg: C.orange[50], text: C.orange[500] }, cyan: { bg: C.cyan[50], text: C.cyan[500] }, teal: { bg: C.teal[50], text: C.teal[500] } };
+  const { bg, text } = cm[color] || cm.blue;
+  return <span onClick={onClick} style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '12px', background: bg, color: text, fontSize: '11px', fontWeight: 500, cursor: onClick ? 'pointer' : 'default' }}>{children}</span>;
+};
+
+const Button = ({ onClick, primary, disabled, small, children, style = {} }) => (
+  <button onClick={onClick} disabled={disabled} style={{
+    display: 'inline-flex', alignItems: 'center', gap: '6px',
+    padding: small ? '6px 12px' : '10px 20px', borderRadius: '4px',
+    border: primary ? 'none' : `1px solid ${C.grey[300]}`,
+    background: disabled ? C.grey[200] : primary ? C.blue[500] : 'white',
+    color: disabled ? C.grey[500] : primary ? 'white' : C.grey[700],
+    fontWeight: 500, fontSize: small ? '12px' : '14px',
+    cursor: disabled ? 'not-allowed' : 'pointer', transition: 'all 0.15s', ...style,
+  }}>{children}</button>
+);
+
+const SQLBlock = ({ sql, maxHeight = '400px' }) => (
+  <div style={{ background: '#1e1e1e', borderRadius: '8px', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 16px', background: '#2d2d2d', borderBottom: '1px solid #404040' }}>
+      <span style={{ color: '#4fc3f7', fontSize: '12px' }}>BigQuery SQL / GQL</span>
+      <Button small onClick={() => navigator.clipboard.writeText(sql)} style={{ background: '#404040', border: 'none', color: '#ccc' }}>Copy</Button>
+    </div>
+    <pre style={{ margin: 0, padding: '16px', overflow: 'auto', maxHeight, fontSize: '12px', lineHeight: '1.6', fontFamily: "'Roboto Mono', monospace", color: '#d4d4d4' }}>{sql}</pre>
+  </div>
+);
+
+// ============================================================
+// Decision Graph Visualization
+// ============================================================
+
+const DecisionGraphViz = ({ session }) => {
+  const [selectedNode, setSelectedNode] = useState(null);
+  if (!session) return null;
+
+  const dp = session.decisionPoints[0];
+  const selected = dp.candidates.filter(c => c.is_selected);
+  const dropped = dp.candidates.filter(c => !c.is_selected);
+
+  // Layout: TechNodes at top, DecisionPoint in middle, Candidates at bottom
+  const techNodes = session.events.map((e, i) => ({
+    id: e.span_id, type: 'tech', label: e.event_type.replace(/_/g, ' ').replace(/COMPLETED|STARTING|RECEIVED/g, '').trim(),
+    agent: e.agent, x: 60 + (i % 6) * 140, y: 50 + Math.floor(i / 6) * 80,
+    color: e.event_type.includes('TOOL') ? C.red[500] : e.event_type.includes('HITL') ? C.yellow[500] : e.event_type.includes('AGENT') ? C.green[500] : e.event_type === 'USER_MESSAGE_RECEIVED' ? C.blue[500] : C.purple[500],
+    event: e,
+  }));
+
+  const decisionNode = {
+    id: dp.decision_id, type: 'decision',
+    label: dp.decision_type.replace(/_/g, ' '),
+    x: 400, y: 270,
+    color: C.teal[500],
+  };
+
+  const candidateNodes = dp.candidates.map((c, i) => ({
+    id: `cand-${c.candidate_value}`, type: 'candidate',
+    label: c.candidate_value, score: c.score,
+    is_selected: c.is_selected, rejection_reason: c.rejection_reason,
+    x: 120 + i * 220, y: 400,
+    color: c.is_selected ? C.green[500] : C.red[500],
+    candidate: c,
+  }));
+
+  const nodeMap = new Map([...techNodes, decisionNode, ...candidateNodes].map(n => [n.id, n]));
+
+  // Edges
+  const causedEdges = session.events.filter(e => e.parent_span_id && nodeMap.has(e.parent_span_id))
+    .map(e => ({ from: e.parent_span_id, to: e.span_id, type: 'Caused' }));
+
+  const decisionSpan = nodeMap.get(dp.span_id);
+  const madeDecisionEdge = decisionSpan ? { from: dp.span_id, to: dp.decision_id, type: 'MadeDecision' } : null;
+
+  const candidateEdges = candidateNodes.map(c => ({
+    from: dp.decision_id, to: c.id,
+    type: c.is_selected ? 'SelectedCandidate' : 'DroppedCandidate',
+  }));
+
+  const drawEdge = (edge, i) => {
+    const from = nodeMap.get(edge.from), to = nodeMap.get(edge.to);
+    if (!from || !to) return null;
+    const colors = { Caused: C.grey[400], MadeDecision: C.teal[500], SelectedCandidate: C.green[500], DroppedCandidate: C.red[500] };
+    const dashed = edge.type === 'MadeDecision' || edge.type === 'DroppedCandidate';
+    return <line key={`${edge.type}-${i}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y}
+      stroke={colors[edge.type] || C.grey[400]} strokeWidth={edge.type === 'Caused' ? 1.5 : 2.5}
+      strokeDasharray={dashed ? '8,4' : 'none'} opacity={edge.type === 'Caused' ? 0.3 : 0.7} />;
+  };
+
+  return (
+    <div>
+      <svg width="100%" height="500" style={{ background: C.grey[50], borderRadius: '8px' }}>
+        {/* Layer labels */}
+        <text x="16" y="26" fontSize="11" fill={C.grey[500]} fontWeight="500">TECHNICAL GRAPH (ADK Spans)</text>
+        <line x1="0" y1="220" x2="100%" y2="220" stroke={C.grey[300]} strokeDasharray="4,4" />
+        <text x="16" y="240" fontSize="11" fill={C.grey[500]} fontWeight="500">DECISION LAYER (DecisionPoint)</text>
+        <line x1="0" y1="340" x2="100%" y2="340" stroke={C.grey[300]} strokeDasharray="4,4" />
+        <text x="16" y="358" fontSize="11" fill={C.grey[500]} fontWeight="500">CANDIDATE LAYER (Selected / Dropped)</text>
+
+        {/* Edges */}
+        {causedEdges.map((e, i) => drawEdge(e, i))}
+        {madeDecisionEdge && drawEdge(madeDecisionEdge, 'md')}
+        {candidateEdges.map((e, i) => drawEdge(e, i))}
+
+        {/* Tech nodes (circles) */}
+        {techNodes.map(n => (
+          <g key={n.id} transform={`translate(${n.x}, ${n.y})`} onClick={() => setSelectedNode(n)} style={{ cursor: 'pointer' }}>
+            {selectedNode?.id === n.id && <circle r="20" fill="none" stroke={C.blue[500]} strokeWidth="3" />}
+            <circle r="14" fill={n.color} stroke="white" strokeWidth="2" />
+            <text textAnchor="middle" dy="28" fontSize="9" fill={C.grey[700]}>{n.label.substring(0, 14)}</text>
+          </g>
+        ))}
+
+        {/* Decision node (diamond) */}
+        <g transform={`translate(${decisionNode.x}, ${decisionNode.y})`} onClick={() => setSelectedNode({ ...decisionNode, dp })} style={{ cursor: 'pointer' }}>
+          {selectedNode?.id === decisionNode.id && <rect x="-32" y="-32" width="64" height="64" rx="4" fill="none" stroke={C.blue[500]} strokeWidth="3" transform="rotate(45)" />}
+          <rect x="-24" y="-24" width="48" height="48" rx="4" fill={decisionNode.color} stroke="white" strokeWidth="2" transform="rotate(45)" />
+          <text textAnchor="middle" dy="4" fontSize="10" fill="white" fontWeight="600">DP</text>
+          <text textAnchor="middle" dy="50" fontSize="10" fill={C.teal[500]} fontWeight="500">{decisionNode.label}</text>
+        </g>
+
+        {/* Candidate nodes (rounded rects) */}
+        {candidateNodes.map(n => (
+          <g key={n.id} transform={`translate(${n.x}, ${n.y})`} onClick={() => setSelectedNode(n)} style={{ cursor: 'pointer' }}>
+            {selectedNode?.id === n.id && <rect x="-72" y="-22" width="144" height="44" rx="8" fill="none" stroke={C.blue[500]} strokeWidth="3" />}
+            <rect x="-68" y="-18" width="136" height="36" rx="6" fill={n.color} stroke="white" strokeWidth="2" />
+            <text textAnchor="middle" dy="-2" fontSize="10" fill="white" fontWeight="500">{n.label.substring(0, 18)}</text>
+            <text textAnchor="middle" dy="12" fontSize="9" fill="rgba(255,255,255,0.8)">{n.is_selected ? 'SELECTED' : 'DROPPED'} ({(n.score * 100).toFixed(0)}%)</text>
+          </g>
+        ))}
+
+        {/* Legend */}
+        <g transform="translate(16, 475)">
+          <circle cx="6" cy="0" r="5" fill={C.grey[400]} /><text x="16" y="4" fontSize="9" fill={C.grey[500]}>Caused</text>
+          <line x1="80" y1="0" x2="110" y2="0" stroke={C.teal[500]} strokeWidth="2.5" strokeDasharray="8,4" /><text x="116" y="4" fontSize="9" fill={C.grey[500]}>MADE_DECISION</text>
+          <line x1="230" y1="0" x2="260" y2="0" stroke={C.green[500]} strokeWidth="2.5" /><text x="266" y="4" fontSize="9" fill={C.grey[500]}>SELECTED_CANDIDATE</text>
+          <line x1="400" y1="0" x2="430" y2="0" stroke={C.red[500]} strokeWidth="2.5" strokeDasharray="8,4" /><text x="436" y="4" fontSize="9" fill={C.grey[500]}>DROPPED_CANDIDATE</text>
+          <rect x="590" y="-8" width="16" height="16" rx="2" fill={C.teal[500]} transform="rotate(45, 598, 0)" /><text x="616" y="4" fontSize="9" fill={C.grey[500]}>DecisionPoint</text>
+        </g>
+      </svg>
+
+      {/* Node detail panel */}
+      {selectedNode && (
+        <Card style={{ marginTop: '12px', border: `2px solid ${C.blue[200]}` }} title={
+          selectedNode.type === 'tech' ? `TechNode: ${selectedNode.label}` :
+          selectedNode.type === 'decision' ? `DecisionPoint: ${selectedNode.label}` :
+          `Candidate: ${selectedNode.label}`
+        }>
+          {selectedNode.type === 'tech' && (
+            <div style={{ fontSize: '12px' }}>
+              <div><strong>span_id:</strong> <code>{selectedNode.id}</code></div>
+              <div><strong>agent:</strong> {selectedNode.agent}</div>
+              <div><strong>event_type:</strong> {selectedNode.event?.event_type}</div>
+              {selectedNode.event?.content && <pre style={{ marginTop: '8px', padding: '8px', background: C.grey[50], borderRadius: '4px', fontSize: '11px', overflow: 'auto', maxHeight: '120px' }}>{JSON.stringify(selectedNode.event.content, null, 2)}</pre>}
+            </div>
+          )}
+          {selectedNode.type === 'decision' && selectedNode.dp && (
+            <div style={{ fontSize: '12px' }}>
+              <div><strong>decision_id:</strong> <code>{selectedNode.dp.decision_id}</code></div>
+              <div><strong>decision_type:</strong> <Badge color="teal">{selectedNode.dp.decision_type}</Badge></div>
+              <div style={{ marginTop: '8px' }}><strong>Rationale:</strong></div>
+              <div style={{ padding: '8px', background: C.teal[50], borderRadius: '4px', marginTop: '4px', lineHeight: '1.5' }}>{selectedNode.dp.rationale}</div>
+              <div style={{ marginTop: '8px' }}><strong>Candidates evaluated:</strong> {selectedNode.dp.candidates.length}</div>
+            </div>
+          )}
+          {selectedNode.type === 'candidate' && selectedNode.candidate && (
+            <div style={{ fontSize: '12px' }}>
+              <div><strong>candidate_value:</strong> {selectedNode.candidate.candidate_value}</div>
+              <div><strong>score:</strong> {(selectedNode.candidate.score * 100).toFixed(0)}%</div>
+              <div><strong>status:</strong> <Badge color={selectedNode.candidate.is_selected ? 'green' : 'red'}>{selectedNode.candidate.is_selected ? 'SELECTED' : 'DROPPED'}</Badge></div>
+              {selectedNode.candidate.rejection_reason && (
+                <div style={{ marginTop: '8px' }}>
+                  <strong>Rejection reason (EU audit):</strong>
+                  <div style={{ padding: '8px', background: C.red[50], borderRadius: '4px', marginTop: '4px', lineHeight: '1.5', color: C.red[600] }}>{selectedNode.candidate.rejection_reason}</div>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+};
+
+// ============================================================
+// Audit Trail Panel
+// ============================================================
+
+const AuditTrailPanel = ({ session }) => {
+  const dp = session.decisionPoints[0];
+  const selected = dp.candidates.filter(c => c.is_selected);
+  const dropped = dp.candidates.filter(c => !c.is_selected);
+
+  return (
+    <Card title="Decision Audit Trail" subtitle="EU regulatory auditability: complete candidate evaluation record">
+      {/* Decision summary */}
+      <div style={{ padding: '16px', background: C.teal[50], borderRadius: '8px', border: `1px solid ${C.grey[200]}`, marginBottom: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+          <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: C.teal[500], display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '14px' }}>DP</div>
+          <div>
+            <div style={{ fontWeight: 600, color: C.grey[900] }}>{dp.decision_type.replace(/_/g, ' ').toUpperCase()}</div>
+            <div style={{ fontSize: '12px', color: C.grey[500] }}>Decision ID: {dp.decision_id}</div>
+          </div>
+        </div>
+        <div style={{ fontSize: '13px', color: C.grey[700], lineHeight: '1.6' }}>{dp.rationale}</div>
+      </div>
+
+      {/* Selected candidates */}
+      <h4 style={{ fontSize: '13px', color: C.green[600], marginBottom: '8px' }}>Selected Candidates ({selected.length})</h4>
+      {selected.map((c, i) => (
+        <div key={i} style={{ padding: '12px', background: C.green[50], borderRadius: '6px', marginBottom: '8px', border: `1px solid ${C.green[100]}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <strong style={{ color: C.green[600] }}>{c.candidate_value}</strong>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <Badge color="green">SELECTED</Badge>
+              <Badge color="blue">Score: {(c.score * 100).toFixed(0)}%</Badge>
+            </div>
+          </div>
+        </div>
+      ))}
+
+      {/* Dropped candidates */}
+      <h4 style={{ fontSize: '13px', color: C.red[600], margin: '16px 0 8px' }}>Dropped Candidates ({dropped.length})</h4>
+      {dropped.map((c, i) => (
+        <div key={i} style={{ padding: '12px', background: C.red[50], borderRadius: '6px', marginBottom: '8px', border: `1px solid ${C.red[100]}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <strong style={{ color: C.red[600] }}>{c.candidate_value}</strong>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <Badge color="red">DROPPED</Badge>
+              <Badge color="yellow">Score: {(c.score * 100).toFixed(0)}%</Badge>
+            </div>
+          </div>
+          <div style={{ fontSize: '12px', color: C.grey[700], padding: '8px', background: 'white', borderRadius: '4px', lineHeight: '1.5' }}>
+            <strong>Rejection rationale:</strong> {c.rejection_reason}
+          </div>
+        </div>
+      ))}
+    </Card>
+  );
+};
+
+// ============================================================
+// SDK Code Panel
+// ============================================================
+
+const SDKCodePanel = ({ session }) => {
+  const dp = session.decisionPoints[0];
+  const code = `from bigquery_agent_analytics.context_graph import ContextGraphManager, ContextGraphConfig
+
+# Initialize
+cgm = ContextGraphManager(
+    project_id="my-project",
+    dataset_id="agent_analytics",
+    config=ContextGraphConfig(endpoint="gemini-2.5-flash"),
+)
+
+# Step 1: Extract business entities + decision semantics
+biz_nodes = cgm.extract_biz_nodes(
+    session_ids=["${session.id}"],
+    use_ai_generate=True,
+)
+
+# Step 2: Extract decision points from agent traces
+decision_points, candidates = cgm.extract_decision_points(
+    session_ids=["${session.id}"],
+    use_ai_generate=True,
+)
+print(f"Found {len(decision_points)} decision points")
+
+# Step 2b: Store pre-extracted decision points + candidates
+# (Idempotent: deletes existing data for the session first)
+cgm.store_decision_points(decision_points, candidates)
+
+# Step 3: Create cross-links + decision edges
+cgm.create_cross_links(["${session.id}"])
+cgm.create_decision_edges(["${session.id}"])
+
+# Step 4: Create extended Property Graph (6-pillar)
+# Nodes: TechNode, BizNode, DecisionPoint, CandidateNode
+# Edges: Caused, Evaluated, MadeDecision, CandidateEdge
+cgm.create_property_graph(include_decisions=True)
+
+# Step 5: EU Regulatory Audit — "Why was X chosen instead of Y?"
+audit_trail = cgm.explain_decision(
+    session_id="${session.id}",
+    decision_type="${dp.decision_type}",
+    include_dropped=True,  # Include rejected candidates with rationale
+)
+
+for result in audit_trail:
+    for decision in result.get("decision_candidates", []):
+        print(f"Decision: {decision['decision_type']}")
+        for c in decision["candidates"]:
+            print(f"  {c['status']}: {c['name']} "
+                  f"(score={c['score']:.2f})")
+            if c["status"] == "DROPPED":
+                print(f"    Reason: {c['rejection_rationale']}")
+
+# Step 6: Export audit trail (dict or JSON string)
+report = cgm.export_audit_trail(
+    session_id="${session.id}",
+    format="json",  # Returns JSON string; use "dict" for list of dicts
+)
+# report contains: decision_point, all candidates, rationale
+# Satisfies: "Why was this ad shown instead of that one?"`;
+
+  return (
+    <Card title="Python SDK Usage" subtitle="Decision Semantics API">
+      <pre style={{ margin: 0, padding: '16px', background: '#1e1e1e', borderRadius: '8px', color: '#d4d4d4', fontSize: '11px', lineHeight: '1.6', fontFamily: "'Roboto Mono', monospace", overflow: 'auto', maxHeight: '600px' }}>{code}</pre>
+    </Card>
+  );
+};
+
+// ============================================================
+// Query Explorer
+// ============================================================
+
+const QueryExplorer = () => {
+  const [activeQuery, setActiveQuery] = useState('extendedOutputSchema');
+  const query = SQL_TEMPLATES[activeQuery];
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+        {Object.entries(SQL_TEMPLATES).map(([key, q]) => (
+          <Badge key={key} color={activeQuery === key ? 'blue' : 'grey'} onClick={() => setActiveQuery(key)}>{q.name}</Badge>
+        ))}
+      </div>
+      <Card style={{ marginBottom: '16px', padding: '16px' }}>
+        <h4 style={{ margin: '0 0 8px 0', fontSize: '14px' }}>{query.name}</h4>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <Badge color={query.category === 'Graph' ? 'purple' : query.category === 'Schema' ? 'blue' : 'green'}>{query.category}</Badge>
+          {query.sql.includes('AI.GENERATE') && <Badge color="purple">AI.GENERATE</Badge>}
+          {query.sql.includes('output_schema') && <Badge color="orange">output_schema</Badge>}
+          {query.sql.includes('PROPERTY GRAPH') && <Badge color="blue">Property Graph</Badge>}
+          {query.sql.includes('GRAPH') && !query.sql.includes('PROPERTY') && <Badge color="purple">GQL</Badge>}
+          {query.sql.includes('DroppedCandidate') && <Badge color="red">EU Audit</Badge>}
+        </div>
+      </Card>
+      <SQLBlock sql={query.sql} maxHeight="500px" />
+    </div>
+  );
+};
+
+// ============================================================
+// Main App
+// ============================================================
+
+function App() {
+  const [activeTab, setActiveTab] = useState('graph');
+  const [activeSession, setActiveSession] = useState(0);
+  const session = DEMO_SESSIONS[activeSession];
+
+  return (
+    <div style={{ fontFamily: "'Google Sans', 'Roboto', sans-serif", background: C.grey[50], minHeight: '100vh' }}>
+      <header style={{ background: 'white', borderBottom: `1px solid ${C.grey[200]}`, padding: '12px 24px', display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ width: '40px', height: '40px', background: `linear-gradient(135deg, ${C.teal[500]}, ${C.blue[500]})`, borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '14px' }}>DS</div>
+          <div>
+            <h1 style={{ margin: 0, fontSize: '18px', color: C.grey[900] }}>Decision Semantics Demo</h1>
+            <p style={{ margin: 0, fontSize: '11px', color: C.grey[500] }}>Context Graph V3 — Decision Semantics</p>
+          </div>
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+          <Badge color="teal">DecisionPoint Nodes</Badge>
+          <Badge color="green">SELECTED_CANDIDATE</Badge>
+          <Badge color="red">DROPPED_CANDIDATE</Badge>
+          <Badge color="purple">EU Audit Trail</Badge>
+        </div>
+      </header>
+
+      <nav style={{ background: 'white', borderBottom: `1px solid ${C.grey[200]}`, paddingLeft: '24px', display: 'flex', overflow: 'auto' }}>
+        <Tab active={activeTab === 'graph'} onClick={() => setActiveTab('graph')} icon="&#x1F517;">Decision Graph</Tab>
+        <Tab active={activeTab === 'audit'} onClick={() => setActiveTab('audit')} icon="&#x1F4CB;">Audit Trail</Tab>
+        <Tab active={activeTab === 'queries'} onClick={() => setActiveTab('queries')} icon="&#x1F4BE;">SQL / GQL</Tab>
+        <Tab active={activeTab === 'sdk'} onClick={() => setActiveTab('sdk')} icon="&#x1F40D;">Python SDK</Tab>
+      </nav>
+
+      <main style={{ padding: '24px', maxWidth: '1400px', margin: '0 auto' }}>
+        {/* Session Selector */}
+        <Card style={{ marginBottom: '20px', padding: '16px' }}>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '13px', fontWeight: 500, color: C.grey[700] }}>Scenario:</span>
+            {DEMO_SESSIONS.map((s, i) => (
+              <Button key={s.id} small primary={activeSession === i} onClick={() => { setActiveSession(i); }}>{s.client} — {s.campaign}</Button>
+            ))}
+          </div>
+          <div style={{ marginTop: '10px', padding: '10px', background: C.grey[50], borderRadius: '6px', fontSize: '13px', color: C.grey[700] }}>
+            {session.scenario}
+          </div>
+          <div style={{ display: 'flex', gap: '24px', fontSize: '12px', color: C.grey[500], marginTop: '10px' }}>
+            <span>Session: <code style={{ background: C.grey[100], padding: '2px 6px', borderRadius: '3px' }}>{session.id}</code></span>
+            <span>Events: {session.events.length}</span>
+            <span>Decision Points: {session.decisionPoints.length}</span>
+            <span>Candidates: {session.decisionPoints[0].candidates.length}</span>
+            <span>Budget: {session.budget}</span>
+          </div>
+        </Card>
+
+        {activeTab === 'graph' && (
+          <div style={{ display: 'grid', gap: '20px' }}>
+            <Card title="Decision Semantics Property Graph" subtitle="TechNode -> MADE_DECISION -> DecisionPoint -> SELECTED/DROPPED -> Candidate">
+              <DecisionGraphViz session={session} />
+            </Card>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+              <Card title="Candidate Evaluation Table" subtitle="All candidates with scores and status">
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead><tr style={{ background: C.grey[50] }}>
+                    <th style={{ padding: '8px', textAlign: 'left', fontWeight: 500 }}>Candidate</th>
+                    <th style={{ padding: '8px', textAlign: 'right', fontWeight: 500 }}>Score</th>
+                    <th style={{ padding: '8px', textAlign: 'center', fontWeight: 500 }}>Status</th>
+                    <th style={{ padding: '8px', textAlign: 'left', fontWeight: 500 }}>Reason</th>
+                  </tr></thead>
+                  <tbody>
+                    {session.decisionPoints[0].candidates.map((c, i) => (
+                      <tr key={i} style={{ borderBottom: `1px solid ${C.grey[200]}` }}>
+                        <td style={{ padding: '8px' }}>{c.candidate_value}</td>
+                        <td style={{ padding: '8px', textAlign: 'right', fontFamily: "'Roboto Mono', monospace" }}>{(c.score * 100).toFixed(0)}%</td>
+                        <td style={{ padding: '8px', textAlign: 'center' }}><Badge color={c.is_selected ? 'green' : 'red'}>{c.is_selected ? 'SELECTED' : 'DROPPED'}</Badge></td>
+                        <td style={{ padding: '8px', fontSize: '11px', color: C.grey[600], maxWidth: '200px' }}>{c.rejection_reason || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Card>
+              <Card title="Event Timeline" subtitle="ADK agent_events trace">
+                <div style={{ overflow: 'auto', maxHeight: '250px' }}>
+                  {session.events.map((e, i) => (
+                    <div key={i} style={{ display: 'flex', gap: '12px', padding: '6px 0', borderBottom: `1px solid ${C.grey[100]}`, fontSize: '12px', alignItems: 'center' }}>
+                      <div style={{ width: '55px', color: C.grey[500], fontFamily: "'Roboto Mono', monospace", fontSize: '10px' }}>{e.timestamp.split('T')[1].replace('Z', '').substring(0, 8)}</div>
+                      <Badge color={e.event_type.includes('TOOL') ? 'red' : e.event_type.includes('HITL') ? 'yellow' : e.event_type.includes('AGENT') ? 'green' : 'blue'}>{e.event_type.replace(/_/g, ' ').substring(0, 22)}</Badge>
+                      <span style={{ color: C.grey[500], fontSize: '11px' }}>{e.agent}</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'audit' && <AuditTrailPanel session={session} />}
+        {activeTab === 'queries' && <QueryExplorer />}
+        {activeTab === 'sdk' && <SDKCodePanel session={session} />}
+
+        {/* Feature summary */}
+        <Card style={{ marginTop: '24px', background: C.blue[50], border: `1px solid ${C.blue[100]}` }}>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', padding: '16px' }}>
+            <span style={{ fontSize: '24px' }}>&#x2696;</span>
+            <div>
+              <h4 style={{ margin: '0 0 8px 0', color: C.blue[600] }}>Decision Semantics — Key Capabilities</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px', fontSize: '12px', color: C.grey[700] }}>
+                <div><strong>DecisionPoint nodes</strong> — Capture when and why an agent made a choice, with full rationale</div>
+                <div><strong>Candidate nodes</strong> — All evaluated options with scores, including those not selected</div>
+                <div><strong>DROPPED_CANDIDATE edges</strong> — Carry <code>rejection_rationale</code> as a property for EU audit compliance</div>
+                <div><strong>Extended output_schema</strong> — AI.GENERATE extracts decision context, candidates, and rejection reasons</div>
+                <div><strong>GQL audit query</strong> — "Why was X shown instead of Y?" traverses DecisionPoint to all candidates</div>
+                <div><strong>Exportable audit trail</strong> — Single queryable unit for regulatory review</div>
+              </div>
+            </div>
+          </div>
+        </Card>
+      </main>
+
+      <footer style={{ padding: '16px 24px', borderTop: `1px solid ${C.grey[200]}`, background: 'white', textAlign: 'center', color: C.grey[500], fontSize: '12px' }}>
+        BigQuery Agent Analytics SDK — Context Graph V3: Decision Semantics | DecisionPoint | Candidate | SELECTED | DROPPED | EU Audit
+      </footer>
+    </div>
+  );
+}
+
+ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>
