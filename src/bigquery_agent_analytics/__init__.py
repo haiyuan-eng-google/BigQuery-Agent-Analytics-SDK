@@ -285,16 +285,20 @@ except ImportError as e:
 # Context Graph
 try:
   from .context_graph import BizNode
+  from .context_graph import Candidate
   from .context_graph import ContextGraphConfig
   from .context_graph import ContextGraphManager
+  from .context_graph import DecisionPoint
   from .context_graph import WorldChangeAlert
   from .context_graph import WorldChangeReport
 
   __all__.extend(
       [
           "BizNode",
+          "Candidate",
           "ContextGraphConfig",
           "ContextGraphManager",
+          "DecisionPoint",
           "WorldChangeAlert",
           "WorldChangeReport",
       ]
