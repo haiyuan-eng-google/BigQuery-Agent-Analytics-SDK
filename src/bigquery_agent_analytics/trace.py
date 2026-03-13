@@ -31,10 +31,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from enum import Enum
 import json
 import logging
+import re
 from typing import Any, Optional
 
 logger = logging.getLogger("bigquery_agent_analytics." + __name__)
@@ -326,6 +328,39 @@ class Span:
     return text
 
 
+_TIME_WINDOW_RE = re.compile(r"^(\d+)([mhd])$")
+
+
+def _parse_time_window(window: str) -> datetime:
+  """Parse a relative time window into an absolute start time.
+
+  Args:
+      window: String like ``'30m'``, ``'1h'``, ``'7d'``.
+
+  Returns:
+      ``datetime`` representing *now - window*.
+
+  Raises:
+      ValueError: If the format is unrecognised.
+  """
+  match = _TIME_WINDOW_RE.match(window.strip().lower())
+  if not match:
+    raise ValueError(
+        f"Invalid time window: {window!r}. "
+        f"Expected format: Xm, Xh, or Xd "
+        f"(e.g. '30m', '1h', '7d')."
+    )
+  value = int(match.group(1))
+  unit = match.group(2)
+  if unit == "m":
+    delta = timedelta(minutes=value)
+  elif unit == "h":
+    delta = timedelta(hours=value)
+  else:  # "d"
+    delta = timedelta(days=value)
+  return datetime.now(timezone.utc) - delta
+
+
 @dataclass
 class TraceFilter:
   """Filtering criteria for listing traces.
@@ -349,6 +384,53 @@ class TraceFilter:
   tool_origin: Optional[str] = None
   root_agent_name: Optional[str] = None
   limit: int = 100
+
+  @classmethod
+  def from_cli_args(
+      cls,
+      last: str | None = None,
+      agent_id: str | None = None,
+      session_id: str | None = None,
+      user_id: str | None = None,
+      has_error: bool | None = None,
+      limit: int = 100,
+  ) -> "TraceFilter":
+    """Build a ``TraceFilter`` from CLI-style arguments.
+
+    Parses ``--last`` time windows (e.g. ``'1h'`` means
+    *start_time = now - 1 hour*).  Also used by the Remote
+    Function dispatch layer to convert params JSON into a
+    filter.
+
+    Supported ``last`` formats: ``Xm`` (minutes), ``Xh``
+    (hours), ``Xd`` (days).
+
+    Args:
+        last: Relative time window string.
+        agent_id: Filter to a specific agent.
+        session_id: Filter to a single session.
+        user_id: Filter to a specific user.
+        has_error: If set, filter by error presence.
+        limit: Maximum number of traces to return.
+
+    Returns:
+        A configured ``TraceFilter``.
+
+    Raises:
+        ValueError: If *last* has an unrecognised format.
+    """
+    start_time = None
+    if last is not None:
+      start_time = _parse_time_window(last)
+    session_ids = [session_id] if session_id else None
+    return cls(
+        start_time=start_time,
+        agent_id=agent_id,
+        user_id=user_id,
+        session_ids=session_ids,
+        has_error=has_error,
+        limit=limit,
+    )
 
   def to_sql_conditions(self) -> tuple[str, list]:
     """Converts filter to SQL WHERE clauses and query parameters.

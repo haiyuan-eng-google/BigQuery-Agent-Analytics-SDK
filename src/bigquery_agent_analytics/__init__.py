@@ -55,9 +55,11 @@ try:
   from .feedback import AnalysisConfig
   from .feedback import DriftReport
   from .feedback import QuestionDistribution
+  from .formatter import format_output
   from .insights import InsightsConfig
   from .insights import InsightsReport
   from .insights import SessionFacet
+  from .serialization import serialize
   from .trace import ContentPart
   from .trace import EventType
   from .trace import ObjectRef
@@ -83,8 +85,10 @@ try:
           "DriftReport",
           "QuestionDistribution",
           "AnalysisConfig",
+          "format_output",
           "InsightsReport",
           "InsightsConfig",
+          "serialize",
           "SessionFacet",
       ]
   )

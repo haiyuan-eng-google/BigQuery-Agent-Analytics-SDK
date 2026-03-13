@@ -1765,13 +1765,27 @@ minimum surface that unblocks all three personas:
 - [ ] Extract filter-building helpers (`--last`, `--agent-id`, etc.) into
       shared utility that constructs `TraceFilter` from CLI args or remote
       function params
-- [ ] Ensure all `Client` methods return serializable objects (JSON-safe dicts
-      or Pydantic models with `.model_dump()`)
+- [ ] Add uniform response serialization layer for both interface boundaries
+      (CLI and Remote Function):
+      - **Dataclass returns** (`Trace`, `Span`, `ContentPart`, `ObjectRef`):
+        Add `Trace.to_dict()` / `Span.to_dict()` methods that recursively
+        convert nested dataclasses and `datetime` fields to JSON-safe dicts
+        (ISO 8601 strings for datetimes)
+      - **Pydantic returns** (`EvaluationReport`, `InsightsReport`,
+        `DriftReport`, `QuestionDistribution`, `WorldChangeReport`): Use
+        `.model_dump(mode="json")` or `.model_dump_json()` — **not** plain
+        `.model_dump()`, which preserves raw `datetime` objects that fail
+        `json.dumps()`. Affected fields include `EvaluationReport.created_at`,
+        `InsightsReport.created_at`, `SessionMetadata.start_time`/`end_time`,
+        etc.
+      - **dict returns** (`doctor()`, `hitl_metrics()`): Verify datetime values
+        are converted to ISO 8601 strings before output
 - [ ] Add `--format` output formatting layer (JSON, text table, tree)
 
 **Exit criteria:**
-- `Client.get_session_trace()` and `Client.evaluate()` return JSON-serializable
-  output (unit test: `json.dumps(result)` succeeds for all evaluators)
+- `json.dumps(serialize(result))` succeeds for every `Client` public method
+  return type — including `Trace`, `EvaluationReport`, `InsightsReport`,
+  `DriftReport`, and `QuestionDistribution` (unit test for each)
 - `TraceFilter.from_cli_args()` parses `--last=1h`, `--agent-id=X`,
   `--session-id=Y` (unit test coverage ≥ 90%)
 - Format layer renders JSON / text / table for a sample trace (snapshot test)
@@ -1805,6 +1819,13 @@ minimum surface that unblocks all three personas:
       - `register.sql` (CREATE FUNCTION DDL templates)
 - [ ] Implement dispatch for: `analyze`, `evaluate`, `judge`, `insights`,
       `drift`
+- [ ] Use the uniform serialization layer from Phase 1 in `_dispatch()` to
+      convert all SDK return types to JSON-safe dicts before building the
+      reply array (see Phase 1 serialization policy)
+- [ ] Reuse the existing `_run_sync()` bridge (`client.py:247`) for sync
+      wrappers — `insights()`, `drift_detection()`, and `deep_analysis()`
+      already route through it, so the Cloud Function entry point can call
+      these sync methods directly without async/sync boundary concerns
 - [ ] Add Terraform/gcloud deployment automation
 - [ ] Write integration tests with BigQuery Remote Function simulator
 - [ ] Document deployment guide with IAM prerequisites (see §5)
@@ -1814,6 +1835,8 @@ minimum surface that unblocks all three personas:
   JSON'{"session_id":"test"}')` returns valid JSON (end-to-end test)
 - Partial failure in a batch (1 of 5 calls errors) returns per-row error,
   not batch-level 400 (integration test)
+- All 5 operations return `json.dumps()`-safe responses (no raw `datetime`
+  objects, no dataclass instances) — verified by integration test
 - `deploy/remote_function/README.md` includes IAM roles, cost estimate,
   and troubleshooting guide
 - Remote Function p95 latency < 5s for `analyze` operation (load test with
