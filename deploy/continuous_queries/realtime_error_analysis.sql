@@ -12,89 +12,64 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- Continuous Query: Real-time Error Analysis
+-- Continuous Query: Real-time Error Classification
 --
--- Classifies tool errors using AI.GENERATE_TEXT and writes results
--- to an error_analysis sink table.
+-- Routes each error event through AI.GENERATE_TEXT for classification,
+-- then writes to a sink table.  No GROUP BY or aggregation — each row
+-- is processed independently, which is the continuous-query requirement.
 --
 -- Prerequisites:
 --   1. Enterprise reservation (see setup_reservation.md)
 --   2. BQ connection with Vertex AI access
---   3. Sink table: PROJECT.DATASET.error_analysis
+--   3. Sink table created separately (see CREATE TABLE below — run once,
+--      NOT as part of the continuous query)
 --
 -- Placeholders:
 --   PROJECT    — GCP project ID
 --   DATASET    — BigQuery dataset
 --   CONNECTION — BQ connection ID (e.g. PROJECT.REGION.my-connection)
 --
--- Usage:
---   bq query --use_legacy_sql=false --continuous=true < realtime_error_analysis.sql
+-- One-time setup (run before starting the continuous query):
+--
+--   CREATE TABLE IF NOT EXISTS `PROJECT.DATASET.error_analysis` (
+--     session_id STRING,
+--     event_timestamp TIMESTAMP,
+--     error_message STRING,
+--     error_category STRING,
+--     severity STRING,
+--     suggested_action STRING,
+--     analyzed_at TIMESTAMP
+--   );
+--
+-- Start the continuous query:
+--   bq query --use_legacy_sql=false --continuous=true \
+--     < realtime_error_analysis.sql
 
-CREATE TABLE IF NOT EXISTS `PROJECT.DATASET.error_analysis` (
-  session_id STRING,
-  event_timestamp TIMESTAMP,
-  error_message STRING,
-  error_category STRING,
-  severity STRING,
-  suggested_action STRING,
-  analyzed_at TIMESTAMP
-);
-
-EXPORT DATA
-OPTIONS (
-  format = 'CLOUD_BIGTABLE',
-  overwrite = false
-)
-AS
+INSERT INTO `PROJECT.DATASET.error_analysis`
 SELECT
   e.session_id,
-  e.event_timestamp,
-  JSON_VALUE(e.content, '$.error_message') AS error_message,
-  JSON_VALUE(
-    AI.GENERATE_TEXT(
-      MODEL `CONNECTION`,
-      CONCAT(
-        'Classify this agent error into exactly one category ',
-        '(configuration, authentication, rate_limit, data_quality, ',
-        'timeout, internal, unknown) and severity (critical, high, ',
-        'medium, low). Return JSON: {"category": "...", "severity": "...", ',
-        '"action": "..."}\n\nError: ',
-        JSON_VALUE(e.content, '$.error_message')
-      )
-    ).ml_generate_text_llm_result,
-    '$.category'
-  ) AS error_category,
-  JSON_VALUE(
-    AI.GENERATE_TEXT(
-      MODEL `CONNECTION`,
-      CONCAT(
-        'Classify this agent error into exactly one category ',
-        '(configuration, authentication, rate_limit, data_quality, ',
-        'timeout, internal, unknown) and severity (critical, high, ',
-        'medium, low). Return JSON: {"category": "...", "severity": "...", ',
-        '"action": "..."}\n\nError: ',
-        JSON_VALUE(e.content, '$.error_message')
-      )
-    ).ml_generate_text_llm_result,
-    '$.severity'
-  ) AS severity,
-  JSON_VALUE(
-    AI.GENERATE_TEXT(
-      MODEL `CONNECTION`,
-      CONCAT(
-        'Classify this agent error into exactly one category ',
-        '(configuration, authentication, rate_limit, data_quality, ',
-        'timeout, internal, unknown) and severity (critical, high, ',
-        'medium, low). Return JSON: {"category": "...", "severity": "...", ',
-        '"action": "..."}\n\nError: ',
-        JSON_VALUE(e.content, '$.error_message')
-      )
-    ).ml_generate_text_llm_result,
-    '$.action'
-  ) AS suggested_action,
+  e.timestamp AS event_timestamp,
+  e.error_message,
+  JSON_VALUE(classification, '$.category') AS error_category,
+  JSON_VALUE(classification, '$.severity') AS severity,
+  JSON_VALUE(classification, '$.action') AS suggested_action,
   CURRENT_TIMESTAMP() AS analyzed_at
 FROM
-  APPENDS(TABLE `PROJECT.DATASET.agent_events`) AS e
+  APPENDS(TABLE `PROJECT.DATASET.agent_events`) AS e,
+  UNNEST([
+    AI.GENERATE_TEXT(
+      MODEL `CONNECTION`,
+      CONCAT(
+        'Classify this agent error into exactly one category ',
+        '(configuration, authentication, rate_limit, data_quality, ',
+        'timeout, internal, unknown) and severity (critical, high, ',
+        'medium, low). Return JSON only: {"category": "...", ',
+        '"severity": "...", "action": "..."}\n\nError: ',
+        e.error_message
+      )
+    ).ml_generate_text_llm_result
+  ]) AS classification
 WHERE
-  e.event_type = 'TOOL_COMPLETED'
-  AND JSON_VALUE(e.content, '$.error_message') IS NOT NULL;
+  e.event_type = 'TOOL_ERROR'
+  OR e.error_message IS NOT NULL
+  OR e.status = 'ERROR';

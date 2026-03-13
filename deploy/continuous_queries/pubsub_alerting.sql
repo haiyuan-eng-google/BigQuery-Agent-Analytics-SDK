@@ -14,8 +14,9 @@
 
 -- Continuous Query: Critical Error → Pub/Sub Alerting
 --
--- Publishes critical agent errors to a Pub/Sub topic for real-time
--- alerting (PagerDuty, Slack, etc.).
+-- Publishes error events to a Pub/Sub topic for real-time alerting
+-- (PagerDuty, Slack, etc.).  Each qualifying row is published
+-- independently — no aggregation.
 --
 -- Prerequisites:
 --   1. Enterprise reservation (see setup_reservation.md)
@@ -27,8 +28,9 @@
 --   DATASET — BigQuery dataset
 --   TOPIC   — Pub/Sub topic path (e.g. projects/PROJECT/topics/agent-alerts)
 --
--- Usage:
---   bq query --use_legacy_sql=false --continuous=true < pubsub_alerting.sql
+-- Start the continuous query:
+--   bq query --use_legacy_sql=false --continuous=true \
+--     < pubsub_alerting.sql
 
 EXPORT DATA
 OPTIONS (
@@ -41,18 +43,16 @@ SELECT
     STRUCT(
       session_id,
       event_type,
-      JSON_VALUE(content, '$.agent') AS agent,
-      JSON_VALUE(content, '$.error_message') AS error_message,
-      JSON_VALUE(content, '$.tool_name') AS tool_name,
-      event_timestamp,
+      agent,
+      error_message,
+      status,
+      timestamp,
       'critical' AS severity
     )
   ) AS message
 FROM
   APPENDS(TABLE `PROJECT.DATASET.agent_events`)
 WHERE
-  -- Alert on tool errors
-  (event_type = 'TOOL_COMPLETED'
-   AND JSON_VALUE(content, '$.error_message') IS NOT NULL)
-  -- Alert on agent errors
-  OR event_type = 'ERROR';
+  event_type = 'TOOL_ERROR'
+  OR error_message IS NOT NULL
+  OR status = 'ERROR';

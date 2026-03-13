@@ -12,86 +12,57 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- Continuous Query: Per-Session Quality Scoring
+-- Continuous Query: Per-Event Session Metrics Sink
 --
--- Computes real-time quality scores for each session as events arrive.
--- Tracks latency, error rate, and turn count metrics.
+-- Writes per-event rows with session context to a sink table.
+-- BigQuery continuous queries do not allow GROUP BY or aggregation,
+-- so this emits one row per event.  Downstream dashboards or
+-- scheduled queries can aggregate by session_id.
 --
 -- Prerequisites:
 --   1. Enterprise reservation (see setup_reservation.md)
---   2. Sink table: PROJECT.DATASET.session_scores
+--   2. Sink table created separately (see CREATE TABLE below)
 --
 -- Placeholders:
 --   PROJECT — GCP project ID
 --   DATASET — BigQuery dataset
 --
--- Usage:
---   bq query --use_legacy_sql=false --continuous=true < session_scoring.sql
+-- One-time setup:
+--
+--   CREATE TABLE IF NOT EXISTS `PROJECT.DATASET.session_events_scored` (
+--     session_id STRING,
+--     event_type STRING,
+--     agent STRING,
+--     timestamp TIMESTAMP,
+--     is_tool_call BOOL,
+--     is_tool_error BOOL,
+--     is_llm_call BOOL,
+--     is_user_turn BOOL,
+--     is_error BOOL,
+--     latency_total_ms FLOAT64,
+--     ingested_at TIMESTAMP
+--   );
+--
+-- Start the continuous query:
+--   bq query --use_legacy_sql=false --continuous=true \
+--     < session_scoring.sql
 
-CREATE TABLE IF NOT EXISTS `PROJECT.DATASET.session_scores` (
-  session_id STRING,
-  event_count INT64,
-  tool_calls INT64,
-  tool_errors INT64,
-  llm_calls INT64,
-  error_rate FLOAT64,
-  total_latency_ms FLOAT64,
-  turn_count INT64,
-  quality_score FLOAT64,
-  scored_at TIMESTAMP
-);
-
-EXPORT DATA
-OPTIONS (
-  format = 'CLOUD_BIGTABLE',
-  overwrite = false
-)
-AS
+INSERT INTO `PROJECT.DATASET.session_events_scored`
 SELECT
   session_id,
-  COUNT(*) AS event_count,
-  COUNTIF(event_type IN ('TOOL_CALL', 'TOOL_COMPLETED')) AS tool_calls,
-  COUNTIF(
-    event_type = 'TOOL_COMPLETED'
-    AND JSON_VALUE(content, '$.error_message') IS NOT NULL
-  ) AS tool_errors,
-  COUNTIF(event_type IN ('LLM_REQUEST', 'LLM_RESPONSE')) AS llm_calls,
-  SAFE_DIVIDE(
-    COUNTIF(
-      event_type = 'TOOL_COMPLETED'
-      AND JSON_VALUE(content, '$.error_message') IS NOT NULL
-    ),
-    NULLIF(
-      COUNTIF(event_type IN ('TOOL_CALL', 'TOOL_COMPLETED')),
-      0
-    )
-  ) AS error_rate,
-  TIMESTAMP_DIFF(
-    MAX(event_timestamp),
-    MIN(event_timestamp),
-    MILLISECOND
-  ) AS total_latency_ms,
-  COUNTIF(event_type = 'USER_INPUT') AS turn_count,
-  -- Quality score: weighted combination (lower error rate + lower latency = higher score)
-  GREATEST(0.0, LEAST(1.0,
-    1.0
-    - COALESCE(SAFE_DIVIDE(
-        COUNTIF(
-          event_type = 'TOOL_COMPLETED'
-          AND JSON_VALUE(content, '$.error_message') IS NOT NULL
-        ),
-        NULLIF(
-          COUNTIF(event_type IN ('TOOL_CALL', 'TOOL_COMPLETED')),
-          0
-        )
-      ), 0.0) * 0.5
-    - LEAST(
-        TIMESTAMP_DIFF(MAX(event_timestamp), MIN(event_timestamp), MILLISECOND) / 10000.0,
-        0.5
-      )
-  )) AS quality_score,
-  CURRENT_TIMESTAMP() AS scored_at
+  event_type,
+  agent,
+  timestamp,
+  event_type = 'TOOL_STARTING' AS is_tool_call,
+  event_type = 'TOOL_ERROR' AS is_tool_error,
+  event_type = 'LLM_REQUEST' AS is_llm_call,
+  event_type = 'USER_MESSAGE_RECEIVED' AS is_user_turn,
+  (ENDS_WITH(event_type, '_ERROR')
+   OR error_message IS NOT NULL
+   OR status = 'ERROR') AS is_error,
+  CAST(
+    JSON_VALUE(latency_ms, '$.total_ms') AS FLOAT64
+  ) AS latency_total_ms,
+  CURRENT_TIMESTAMP() AS ingested_at
 FROM
-  APPENDS(TABLE `PROJECT.DATASET.agent_events`)
-GROUP BY
-  session_id;
+  APPENDS(TABLE `PROJECT.DATASET.agent_events`);

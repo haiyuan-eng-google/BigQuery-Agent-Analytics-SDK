@@ -997,7 +997,9 @@ class TestViews:
     )
     assert result.exit_code == 0
     vm.create_view.assert_called_once_with("LLM_REQUEST")
-    assert "LLM_REQUEST" in result.output
+    parsed = json.loads(result.output)
+    assert parsed["event_type"] == "LLM_REQUEST"
+    assert parsed["status"] == "created"
 
   @patch("bigquery_agent_analytics.cli._build_view_manager")
   def test_views_create_all_error_exit_2(self, mock_build_vm):

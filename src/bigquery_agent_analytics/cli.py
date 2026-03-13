@@ -577,12 +577,18 @@ def views_create(
     ),
     table_id: str = typer.Option("agent_events", help="Events table name."),
     prefix: str = typer.Option("adk_", help="View name prefix."),
+    fmt: str = typer.Option(
+        "json",
+        "--format",
+        help="Output format: json|text|table.",
+    ),
 ) -> None:
   """Create a view for a single event type."""
   try:
     vm = _build_view_manager(project_id, dataset_id, table_id, prefix)
     vm.create_view(event_type)
-    typer.echo(f"View created for {event_type}.")
+    result = {"event_type": event_type, "status": "created"}
+    typer.echo(format_output(result, fmt))
   except Exception as exc:
     typer.echo(f"Error: {exc}", err=True)
     raise typer.Exit(code=2)
