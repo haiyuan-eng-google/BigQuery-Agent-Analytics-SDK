@@ -1755,8 +1755,7 @@ class Client:
               "status": row.get(f"{prefix}status", "OK"),
               "error_message": row.get(f"{prefix}error_message"),
               "parent_span_id": (
-                  row.get("parent_span_id")
-                  if prefix == "child_" else None
+                  row.get("parent_span_id") if prefix == "child_" else None
               ),
           }
         elif prefix == "child_" and not seen[sid].get("parent_span_id"):
@@ -1774,9 +1773,7 @@ class Client:
     # Sort by timestamp for deterministic chronological order.
     # Use epoch as fallback (timezone-aware to avoid naive/aware conflicts).
     _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-    gql_spans.sort(
-        key=lambda s: (s.timestamp or _epoch, s.span_id or "")
-    )
+    gql_spans.sort(key=lambda s: (s.timestamp or _epoch, s.span_id or ""))
 
     spans = gql_spans
     user_id = flat_trace.user_id

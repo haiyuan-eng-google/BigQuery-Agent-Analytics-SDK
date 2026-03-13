@@ -23,8 +23,7 @@ from unittest.mock import patch
 import pytest
 
 from bigquery_agent_analytics.insights import _AI_GENERATE_ANALYSIS_QUERY
-from bigquery_agent_analytics.insights import \
-  _AI_GENERATE_FACET_EXTRACTION_QUERY
+from bigquery_agent_analytics.insights import _AI_GENERATE_FACET_EXTRACTION_QUERY
 from bigquery_agent_analytics.insights import aggregate_facets
 from bigquery_agent_analytics.insights import AggregatedInsights
 from bigquery_agent_analytics.insights import ANALYSIS_PROMPTS

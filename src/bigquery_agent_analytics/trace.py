@@ -453,8 +453,7 @@ class TraceFilter:
       )
     if self.experiment_id:
       conditions.append(
-          "JSON_VALUE(attributes, '$.experiment_id')"
-          " = @experiment_id"
+          "JSON_VALUE(attributes, '$.experiment_id')" " = @experiment_id"
       )
       params.append(
           bigquery.ScalarQueryParameter(
@@ -484,9 +483,7 @@ class TraceFilter:
           )
       )
     if self.tool_origin:
-      conditions.append(
-          "JSON_VALUE(content, '$.tool_origin') = @tool_origin"
-      )
+      conditions.append("JSON_VALUE(content, '$.tool_origin') = @tool_origin")
       params.append(
           bigquery.ScalarQueryParameter(
               "tool_origin",
@@ -496,8 +493,7 @@ class TraceFilter:
       )
     if self.root_agent_name:
       conditions.append(
-          "JSON_VALUE(attributes, '$.root_agent_name')"
-          " = @root_agent_name"
+          "JSON_VALUE(attributes, '$.root_agent_name')" " = @root_agent_name"
       )
       params.append(
           bigquery.ScalarQueryParameter(

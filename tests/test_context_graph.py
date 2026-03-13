@@ -29,7 +29,6 @@ from bigquery_agent_analytics.context_graph import DecisionPoint
 from bigquery_agent_analytics.context_graph import WorldChangeAlert
 from bigquery_agent_analytics.context_graph import WorldChangeReport
 
-
 # ------------------------------------------------------------------ #
 # Data Model Tests                                                     #
 # ------------------------------------------------------------------ #
@@ -204,9 +203,7 @@ class TestContextGraphManager:
 
   def test_resolve_endpoint_rejects_legacy_ref(self):
     mgr = self._make_manager()
-    mgr.config = ContextGraphConfig(
-        endpoint="my-project.my_dataset.my_model"
-    )
+    mgr.config = ContextGraphConfig(endpoint="my-project.my_dataset.my_model")
     with pytest.raises(ValueError, match="Legacy BQ ML"):
       mgr._resolve_endpoint()
 
@@ -305,9 +302,7 @@ class TestContextGraphManager:
     mock_client = MagicMock()
     mock_job = MagicMock()
     mock_client.query.return_value = mock_job
-    mock_client.insert_rows_json.return_value = [
-        {"errors": ["insert failed"]}
-    ]
+    mock_client.insert_rows_json.return_value = [{"errors": ["insert failed"]}]
     mgr = self._make_manager(mock_client)
 
     nodes = [
@@ -468,10 +463,9 @@ class TestContextGraphManager:
 
   def test_extract_query_has_output_schema(self):
     self._make_manager()
-    from bigquery_agent_analytics.context_graph import (
-        _BIZ_NODE_OUTPUT_SCHEMA,
-        _EXTRACT_BIZ_NODES_QUERY,
-    )
+    from bigquery_agent_analytics.context_graph import _BIZ_NODE_OUTPUT_SCHEMA
+    from bigquery_agent_analytics.context_graph import _EXTRACT_BIZ_NODES_QUERY
+
     assert "output_schema =>" in _EXTRACT_BIZ_NODES_QUERY
     assert "entity_type" in _BIZ_NODE_OUTPUT_SCHEMA
     assert "entity_value" in _BIZ_NODE_OUTPUT_SCHEMA
@@ -496,7 +490,9 @@ class TestContextGraphManager:
             "parent_span_id": "s1",
             "parent_event_type": "USER_MESSAGE_RECEIVED",
             "parent_agent": "root",
-            "parent_timestamp": datetime(2025, 6, 1, 12, 0, tzinfo=timezone.utc),
+            "parent_timestamp": datetime(
+                2025, 6, 1, 12, 0, tzinfo=timezone.utc
+            ),
             "session_id": "sess-1",
             "parent_invocation_id": "inv-1",
             "parent_content": {},
@@ -613,15 +609,13 @@ class TestContextGraphManager:
     assert nodes[0].artifact_uri == "gs://bucket/file.pdf"
 
   def test_cross_link_id_uses_biz_node_id(self):
-    from bigquery_agent_analytics.context_graph import (
-        _INSERT_CROSS_LINKS_QUERY,
-    )
+    from bigquery_agent_analytics.context_graph import _INSERT_CROSS_LINKS_QUERY
+
     assert "b.biz_node_id AS link_id" in _INSERT_CROSS_LINKS_QUERY
 
   def test_merge_deletes_stale_biz_nodes(self):
-    from bigquery_agent_analytics.context_graph import (
-        _EXTRACT_BIZ_NODES_QUERY,
-    )
+    from bigquery_agent_analytics.context_graph import _EXTRACT_BIZ_NODES_QUERY
+
     assert "WHEN NOT MATCHED BY SOURCE" in _EXTRACT_BIZ_NODES_QUERY
     assert "DELETE" in _EXTRACT_BIZ_NODES_QUERY
 
@@ -844,9 +838,7 @@ class TestDecisionSemantics:
     mock_client = MagicMock()
     mock_job = MagicMock()
     mock_client.query.return_value = mock_job
-    mock_client.insert_rows_json.return_value = [
-        {"errors": ["insert failed"]}
-    ]
+    mock_client.insert_rows_json.return_value = [{"errors": ["insert failed"]}]
     mgr = self._make_manager(mock_client)
 
     dps = [
@@ -1096,9 +1088,8 @@ class TestDecisionSemantics:
     assert trail[0]["candidates"][0]["status"] == "SELECTED"
 
   def test_decision_output_schema_has_required_fields(self):
-    from bigquery_agent_analytics.context_graph import (
-        _DECISION_POINT_OUTPUT_SCHEMA,
-    )
+    from bigquery_agent_analytics.context_graph import _DECISION_POINT_OUTPUT_SCHEMA
+
     assert "decision_type" in _DECISION_POINT_OUTPUT_SCHEMA
     assert "candidates" in _DECISION_POINT_OUTPUT_SCHEMA
     assert "score" in _DECISION_POINT_OUTPUT_SCHEMA
@@ -1147,7 +1138,8 @@ class TestDecisionSemantics:
     mgr = self._make_manager(mock_client)
 
     dps, cands = mgr.extract_decision_points(
-        ["sess-1"], use_ai_generate=False,
+        ["sess-1"],
+        use_ai_generate=False,
     )
     assert len(dps) == 2
     assert dps[0].span_id == "s5"
@@ -1166,33 +1158,36 @@ class TestDecisionSemantics:
         {
             "span_id": "s5",
             "session_id": "sess-1",
-            "decisions_json": json.dumps([
-                {
-                    "decision_type": "audience_selection",
-                    "description": "Select target audience",
-                    "candidates": [
-                        {
-                            "name": "Athletes 18-35",
-                            "score": 0.91,
-                            "status": "SELECTED",
-                            "rejection_rationale": None,
-                        },
-                        {
-                            "name": "Fitness Enthusiasts",
-                            "score": 0.78,
-                            "status": "DROPPED",
-                            "rejection_rationale": "Lower engagement",
-                        },
-                    ],
-                },
-            ]),
+            "decisions_json": json.dumps(
+                [
+                    {
+                        "decision_type": "audience_selection",
+                        "description": "Select target audience",
+                        "candidates": [
+                            {
+                                "name": "Athletes 18-35",
+                                "score": 0.91,
+                                "status": "SELECTED",
+                                "rejection_rationale": None,
+                            },
+                            {
+                                "name": "Fitness Enthusiasts",
+                                "score": 0.78,
+                                "status": "DROPPED",
+                                "rejection_rationale": "Lower engagement",
+                            },
+                        ],
+                    },
+                ]
+            ),
         },
     ]
     mock_client.query.return_value = mock_job
     mgr = self._make_manager(mock_client)
 
     dps, cands = mgr.extract_decision_points(
-        ["sess-1"], use_ai_generate=True,
+        ["sess-1"],
+        use_ai_generate=True,
     )
     assert len(dps) == 1
     assert dps[0].decision_type == "audience_selection"
@@ -1224,7 +1219,8 @@ class TestDecisionSemantics:
     mgr = self._make_manager(mock_client)
 
     dps, cands = mgr.extract_decision_points(
-        ["sess-1"], use_ai_generate=True,
+        ["sess-1"],
+        use_ai_generate=True,
     )
     assert dps == []
     assert cands == []
@@ -1244,7 +1240,8 @@ class TestDecisionSemantics:
     mgr = self._make_manager(mock_client)
 
     dps, cands = mgr.extract_decision_points(
-        ["sess-1"], use_ai_generate=True,
+        ["sess-1"],
+        use_ai_generate=True,
     )
     assert dps == []
     assert cands == []
@@ -1450,7 +1447,9 @@ class TestDecisionSemantics:
         },
     ]
     mock_client.query.side_effect = [
-        mock_job_fail, mock_job_dp, mock_job_cand,
+        mock_job_fail,
+        mock_job_dp,
+        mock_job_cand,
     ]
     mgr = self._make_manager(mock_client)
 
@@ -1529,6 +1528,7 @@ class TestDecisionSemantics:
     result = mgr.export_audit_trail("sess-1", format="json")
     assert isinstance(result, str)
     import json
+
     parsed = json.loads(result)
     assert len(parsed) == 1
     assert parsed[0]["decision_type"] == "audience"
@@ -1561,19 +1561,10 @@ class TestDecisionSemantics:
     ddl = mgr.get_decision_property_graph_ddl()
     # MadeDecision edge: source=TechNode, dest=DecisionPoint
     assert "SOURCE KEY (span_id) REFERENCES TechNode" in ddl
-    assert (
-        "DESTINATION KEY (decision_id) REFERENCES DecisionPoint"
-        in ddl
-    )
+    assert "DESTINATION KEY (decision_id) REFERENCES DecisionPoint" in ddl
     # CandidateEdge: source=DecisionPoint, dest=CandidateNode
-    assert (
-        "SOURCE KEY (decision_id) REFERENCES DecisionPoint"
-        in ddl
-    )
-    assert (
-        "DESTINATION KEY (candidate_id) REFERENCES CandidateNode"
-        in ddl
-    )
+    assert "SOURCE KEY (decision_id) REFERENCES DecisionPoint" in ddl
+    assert "DESTINATION KEY (candidate_id) REFERENCES CandidateNode" in ddl
 
   def test_eu_audit_gql_edge_direction(self):
     """EU audit GQL traverses forward: TechNode->DP->Candidate."""
@@ -1594,9 +1585,7 @@ class TestClientContextGraph:
   """Tests for Client.context_graph() factory method."""
 
   def test_context_graph_returns_manager(self):
-    with patch(
-        "bigquery_agent_analytics.client.bigquery.Client"
-    ):
+    with patch("bigquery_agent_analytics.client.bigquery.Client"):
       from bigquery_agent_analytics.client import Client
 
       # Patch schema verification
@@ -1611,9 +1600,7 @@ class TestClientContextGraph:
         assert mgr.dataset_id == "d"
 
   def test_context_graph_with_config(self):
-    with patch(
-        "bigquery_agent_analytics.client.bigquery.Client"
-    ):
+    with patch("bigquery_agent_analytics.client.bigquery.Client"):
       from bigquery_agent_analytics.client import Client
 
       with patch.object(Client, "_verify_schema"):
@@ -1627,9 +1614,7 @@ class TestClientContextGraph:
 
   def test_get_session_trace_gql_fallback_on_empty(self):
     """GQL with no edges falls back to flat get_session_trace."""
-    with patch(
-        "bigquery_agent_analytics.client.bigquery.Client"
-    ):
+    with patch("bigquery_agent_analytics.client.bigquery.Client"):
       from bigquery_agent_analytics.client import Client
       from bigquery_agent_analytics.trace import Trace
 
@@ -1640,29 +1625,26 @@ class TestClientContextGraph:
         )
         # GQL returns empty
         with patch.object(
-            ContextGraphManager, "reconstruct_trace_gql",
+            ContextGraphManager,
+            "reconstruct_trace_gql",
             return_value=[],
         ):
-          mock_trace = Trace(
-              trace_id="t1", session_id="sess-1", spans=[]
-          )
+          mock_trace = Trace(trace_id="t1", session_id="sess-1", spans=[])
           with patch.object(
-              Client, "get_session_trace",
+              Client,
+              "get_session_trace",
               return_value=mock_trace,
           ) as mock_flat:
-            result = client.get_session_trace_gql(
-                session_id="sess-1"
-            )
+            result = client.get_session_trace_gql(session_id="sess-1")
             mock_flat.assert_called_once_with("sess-1")
             assert result.session_id == "sess-1"
 
   def test_get_session_trace_gql_merges_isolated_events(self):
     """GQL edges + flat SQL merge captures isolated events."""
-    with patch(
-        "bigquery_agent_analytics.client.bigquery.Client"
-    ):
+    with patch("bigquery_agent_analytics.client.bigquery.Client"):
       from bigquery_agent_analytics.client import Client
-      from bigquery_agent_analytics.trace import Span, Trace
+      from bigquery_agent_analytics.trace import Span
+      from bigquery_agent_analytics.trace import Trace
 
       with patch.object(Client, "_verify_schema"):
         client = Client(
@@ -1696,27 +1678,41 @@ class TestClientContextGraph:
         ]
         # Flat trace has s1, s2, and an isolated s3
         flat_spans = [
-            Span(event_type="USER_MESSAGE_RECEIVED",
-                 agent="root", timestamp=ts, span_id="s1"),
-            Span(event_type="LLM_REQUEST",
-                 agent="root", timestamp=ts, span_id="s2"),
-            Span(event_type="STATE_DELTA",
-                 agent="root", timestamp=ts, span_id="s3"),
+            Span(
+                event_type="USER_MESSAGE_RECEIVED",
+                agent="root",
+                timestamp=ts,
+                span_id="s1",
+            ),
+            Span(
+                event_type="LLM_REQUEST",
+                agent="root",
+                timestamp=ts,
+                span_id="s2",
+            ),
+            Span(
+                event_type="STATE_DELTA",
+                agent="root",
+                timestamp=ts,
+                span_id="s3",
+            ),
         ]
         flat_trace = Trace(
-            trace_id="t1", session_id="sess-1", spans=flat_spans,
+            trace_id="t1",
+            session_id="sess-1",
+            spans=flat_spans,
         )
         with patch.object(
-            ContextGraphManager, "reconstruct_trace_gql",
+            ContextGraphManager,
+            "reconstruct_trace_gql",
             return_value=gql_rows,
         ):
           with patch.object(
-              Client, "get_session_trace",
+              Client,
+              "get_session_trace",
               return_value=flat_trace,
           ):
-            result = client.get_session_trace_gql(
-                session_id="sess-1"
-            )
+            result = client.get_session_trace_gql(session_id="sess-1")
             span_ids = {s.span_id for s in result.spans}
             # All three spans present: s1, s2 from GQL + s3 from flat
             assert "s1" in span_ids
@@ -1726,11 +1722,10 @@ class TestClientContextGraph:
 
   def test_get_session_trace_gql_backfills_parent_link(self):
     """Span first seen as parent_ gets parent_span_id backfilled."""
-    with patch(
-        "bigquery_agent_analytics.client.bigquery.Client"
-    ):
+    with patch("bigquery_agent_analytics.client.bigquery.Client"):
       from bigquery_agent_analytics.client import Client
-      from bigquery_agent_analytics.trace import Span, Trace
+      from bigquery_agent_analytics.trace import Span
+      from bigquery_agent_analytics.trace import Trace
 
       with patch.object(Client, "_verify_schema"):
         client = Client(
@@ -1789,26 +1784,40 @@ class TestClientContextGraph:
             },
         ]
         flat_trace = Trace(
-            trace_id="t1", session_id="sess-1", spans=[
-                Span(event_type="USER_MESSAGE_RECEIVED",
-                     agent="root", timestamp=ts1, span_id="s1"),
-                Span(event_type="LLM_REQUEST",
-                     agent="root", timestamp=ts2, span_id="s2"),
-                Span(event_type="TOOL_COMPLETED",
-                     agent="root", timestamp=ts3, span_id="s3"),
+            trace_id="t1",
+            session_id="sess-1",
+            spans=[
+                Span(
+                    event_type="USER_MESSAGE_RECEIVED",
+                    agent="root",
+                    timestamp=ts1,
+                    span_id="s1",
+                ),
+                Span(
+                    event_type="LLM_REQUEST",
+                    agent="root",
+                    timestamp=ts2,
+                    span_id="s2",
+                ),
+                Span(
+                    event_type="TOOL_COMPLETED",
+                    agent="root",
+                    timestamp=ts3,
+                    span_id="s3",
+                ),
             ],
         )
         with patch.object(
-            ContextGraphManager, "reconstruct_trace_gql",
+            ContextGraphManager,
+            "reconstruct_trace_gql",
             return_value=gql_rows,
         ):
           with patch.object(
-              Client, "get_session_trace",
+              Client,
+              "get_session_trace",
               return_value=flat_trace,
           ):
-            result = client.get_session_trace_gql(
-                session_id="sess-1"
-            )
+            result = client.get_session_trace_gql(session_id="sess-1")
             by_id = {s.span_id: s for s in result.spans}
             # s2 should have s1 as parent (backfilled)
             assert by_id["s2"].parent_span_id == "s1"
@@ -1819,9 +1828,7 @@ class TestClientContextGraph:
 
   def test_get_session_trace_gql_chronological_order(self):
     """Spans are returned in chronological order."""
-    with patch(
-        "bigquery_agent_analytics.client.bigquery.Client"
-    ):
+    with patch("bigquery_agent_analytics.client.bigquery.Client"):
       from bigquery_agent_analytics.client import Client
       from bigquery_agent_analytics.trace import Trace
 
@@ -1879,18 +1886,20 @@ class TestClientContextGraph:
             },
         ]
         flat_trace = Trace(
-            trace_id="t1", session_id="sess-1", spans=[],
+            trace_id="t1",
+            session_id="sess-1",
+            spans=[],
         )
         with patch.object(
-            ContextGraphManager, "reconstruct_trace_gql",
+            ContextGraphManager,
+            "reconstruct_trace_gql",
             return_value=gql_rows,
         ):
           with patch.object(
-              Client, "get_session_trace",
+              Client,
+              "get_session_trace",
               return_value=flat_trace,
           ):
-            result = client.get_session_trace_gql(
-                session_id="sess-1"
-            )
+            result = client.get_session_trace_gql(session_id="sess-1")
             ids = [s.span_id for s in result.spans]
             assert ids == ["s1", "s2", "s3"]

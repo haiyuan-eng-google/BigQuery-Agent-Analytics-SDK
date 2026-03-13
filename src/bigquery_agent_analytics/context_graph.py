@@ -172,16 +172,10 @@ class WorldChangeAlert(BaseModel):
   """
 
   biz_node: str = Field(description="The business entity that changed.")
-  original_state: str = Field(
-      description="State when the agent evaluated it."
-  )
+  original_state: str = Field(description="State when the agent evaluated it.")
   current_state: str = Field(description="Current state.")
-  drift_type: str = Field(
-      description="Type of drift detected."
-  )
-  severity: float = Field(
-      description="Drift severity (0.0-1.0)."
-  )
+  drift_type: str = Field(description="Type of drift detected.")
+  severity: float = Field(description="Drift severity (0.0-1.0).")
   recommendation: str = Field(
       default="Review before approving.",
       description="Suggested action.",
@@ -254,9 +248,7 @@ class ContextGraphConfig(BaseModel):
   cross_links_table: str = Field(default="context_cross_links")
   decision_points_table: str = Field(default="decision_points")
   candidates_table: str = Field(default="candidates")
-  made_decision_edges_table: str = Field(
-      default="made_decision_edges"
-  )
+  made_decision_edges_table: str = Field(default="made_decision_edges")
   candidate_edges_table: str = Field(default="candidate_edges")
   graph_name: str = Field(default="agent_context_graph")
   endpoint: str = Field(default="gemini-2.5-flash")
@@ -1071,9 +1063,7 @@ class ContextGraphManager:
     job = self.client.query(ddl)
     job.result()
 
-  def _extract_via_ai_generate(
-      self, session_ids: list[str]
-  ) -> list[BizNode]:
+  def _extract_via_ai_generate(self, session_ids: list[str]) -> list[BizNode]:
     """Server-side extraction using AI.GENERATE with MERGE upsert."""
     self._ensure_biz_nodes_table()
 
@@ -1090,9 +1080,7 @@ class ContextGraphManager:
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ArrayQueryParameter(
-                "session_ids", "STRING", session_ids
-            ),
+            bigquery.ArrayQueryParameter("session_ids", "STRING", session_ids),
         ]
     )
 
@@ -1122,9 +1110,7 @@ class ContextGraphManager:
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ArrayQueryParameter(
-                "session_ids", "STRING", session_ids
-            ),
+            bigquery.ArrayQueryParameter("session_ids", "STRING", session_ids),
         ]
     )
 
@@ -1146,9 +1132,7 @@ class ContextGraphManager:
       logger.warning("Payload extraction failed: %s", e)
       return []
 
-  def _read_biz_nodes(
-      self, session_ids: list[str]
-  ) -> list[BizNode]:
+  def _read_biz_nodes(self, session_ids: list[str]) -> list[BizNode]:
     """Reads extracted biz nodes from the output table."""
     query = f"""\
     SELECT span_id, session_id, node_type, node_value, confidence,
@@ -1160,9 +1144,7 @@ class ContextGraphManager:
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ArrayQueryParameter(
-                "session_ids", "STRING", session_ids
-            ),
+            bigquery.ArrayQueryParameter("session_ids", "STRING", session_ids),
         ]
     )
 
@@ -1226,8 +1208,7 @@ class ContextGraphManager:
     ]
 
     table_ref = (
-        f"{self.project_id}.{self.dataset_id}"
-        f".{self.config.biz_nodes_table}"
+        f"{self.project_id}.{self.dataset_id}" f".{self.config.biz_nodes_table}"
     )
 
     try:
@@ -1245,9 +1226,7 @@ class ContextGraphManager:
   # Cross-Link Generation                                            #
   # -------------------------------------------------------------- #
 
-  def create_cross_links(
-      self, session_ids: list[str]
-  ) -> bool:
+  def create_cross_links(self, session_ids: list[str]) -> bool:
     """Creates EVALUATED edges linking TechNodes to BizNodes.
 
     Args:
@@ -1271,9 +1250,7 @@ class ContextGraphManager:
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ArrayQueryParameter(
-                "session_ids", "STRING", session_ids
-            ),
+            bigquery.ArrayQueryParameter("session_ids", "STRING", session_ids),
         ]
     )
 
@@ -1488,12 +1465,8 @@ class ContextGraphManager:
     )
 
     params = [
-        bigquery.ScalarQueryParameter(
-            "session_id", "STRING", session_id
-        ),
-        bigquery.ScalarQueryParameter(
-            "result_limit", "INT64", result_limit
-        ),
+        bigquery.ScalarQueryParameter("session_id", "STRING", session_id),
+        bigquery.ScalarQueryParameter("result_limit", "INT64", result_limit),
     ]
     if decision_type:
       params.append(
@@ -1517,10 +1490,7 @@ class ContextGraphManager:
       )
 
     if not include_dropped:
-      results = [
-          r for r in results
-          if r.get("candidate_status") != "DROPPED"
-      ]
+      results = [r for r in results if r.get("candidate_status") != "DROPPED"]
 
     return results
 
@@ -1545,15 +1515,11 @@ class ContextGraphManager:
         bigquery.ScalarQueryParameter(
             "decision_event_type", "STRING", decision_event_type
         ),
-        bigquery.ScalarQueryParameter(
-            "result_limit", "INT64", result_limit
-        ),
+        bigquery.ScalarQueryParameter("result_limit", "INT64", result_limit),
     ]
     if biz_entity:
       params.append(
-          bigquery.ScalarQueryParameter(
-              "biz_entity", "STRING", biz_entity
-          )
+          bigquery.ScalarQueryParameter("biz_entity", "STRING", biz_entity)
       )
 
     job_config = bigquery.QueryJobConfig(query_parameters=params)
@@ -1620,9 +1586,7 @@ class ContextGraphManager:
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ScalarQueryParameter(
-                "session_id", "STRING", session_id
-            ),
+            bigquery.ScalarQueryParameter("session_id", "STRING", session_id),
             bigquery.ScalarQueryParameter(
                 "result_limit", "INT64", result_limit
             ),
@@ -1672,9 +1636,7 @@ class ContextGraphManager:
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ScalarQueryParameter(
-                "session_id", "STRING", session_id
-            ),
+            bigquery.ScalarQueryParameter("session_id", "STRING", session_id),
             bigquery.ScalarQueryParameter(
                 "result_limit", "INT64", result_limit
             ),
@@ -1693,9 +1655,7 @@ class ContextGraphManager:
   # World Change Detection                                           #
   # -------------------------------------------------------------- #
 
-  def get_biz_nodes_for_session(
-      self, session_id: str
-  ) -> list[BizNode]:
+  def get_biz_nodes_for_session(self, session_id: str) -> list[BizNode]:
     """Returns all business entities evaluated in a session.
 
     Args:
@@ -1712,9 +1672,7 @@ class ContextGraphManager:
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ScalarQueryParameter(
-                "session_id", "STRING", session_id
-            ),
+            bigquery.ScalarQueryParameter("session_id", "STRING", session_id),
         ]
     )
 
@@ -1735,13 +1693,12 @@ class ContextGraphManager:
     except Exception as e:
       logger.warning(
           "Failed to get biz nodes for session %s: %s",
-          session_id, e,
+          session_id,
+          e,
       )
       return []
 
-  def _get_biz_nodes_with_timestamp(
-      self, session_id: str
-  ) -> list[BizNode]:
+  def _get_biz_nodes_with_timestamp(self, session_id: str) -> list[BizNode]:
     """Returns biz nodes with ``evaluated_at`` timestamp from the events table.
 
     Uses ``_WORLD_CHANGE_CHECK_QUERY`` which JOINs biz_nodes with
@@ -1756,9 +1713,7 @@ class ContextGraphManager:
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ScalarQueryParameter(
-                "session_id", "STRING", session_id
-            ),
+            bigquery.ScalarQueryParameter("session_id", "STRING", session_id),
         ]
     )
 
@@ -1779,7 +1734,8 @@ class ContextGraphManager:
     except Exception as e:
       logger.warning(
           "Failed to get timestamped biz nodes for session %s: %s",
-          session_id, e,
+          session_id,
+          e,
       )
       raise
 
@@ -1834,7 +1790,8 @@ class ContextGraphManager:
         except Exception as e:
           logger.warning(
               "World state check failed for %s: %s",
-              node.node_value, e,
+              node.node_value,
+              e,
           )
           callback_failures += 1
           continue
@@ -1845,12 +1802,8 @@ class ContextGraphManager:
               WorldChangeAlert(
                   biz_node=node.node_value,
                   original_state=f"{node.node_type}: {node.node_value}",
-                  current_state=state.get(
-                      "current_value", "unavailable"
-                  ),
-                  drift_type=state.get(
-                      "drift_type", "unavailable"
-                  ),
+                  current_state=state.get("current_value", "unavailable"),
+                  drift_type=state.get("drift_type", "unavailable"),
                   severity=state.get("severity", 0.8),
                   recommendation=state.get(
                       "recommendation",
@@ -1888,9 +1841,7 @@ class ContextGraphManager:
         "dataset": self.dataset_id,
         "decision_points_table": self.config.decision_points_table,
         "candidates_table": self.config.candidates_table,
-        "made_decision_edges_table": (
-            self.config.made_decision_edges_table
-        ),
+        "made_decision_edges_table": (self.config.made_decision_edges_table),
         "candidate_edges_table": self.config.candidate_edges_table,
     }
     for ddl_template in (
@@ -1944,9 +1895,7 @@ class ContextGraphManager:
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ArrayQueryParameter(
-                "session_ids", "STRING", session_ids
-            ),
+            bigquery.ArrayQueryParameter("session_ids", "STRING", session_ids),
         ]
     )
 
@@ -1954,9 +1903,7 @@ class ContextGraphManager:
       job = self.client.query(query, job_config=job_config)
       rows = list(job.result())
     except Exception as e:
-      logger.warning(
-          "AI.GENERATE decision extraction failed: %s", e
-      )
+      logger.warning("AI.GENERATE decision extraction failed: %s", e)
       return [], []
 
     all_dps: list[DecisionPoint] = []
@@ -1973,9 +1920,7 @@ class ContextGraphManager:
       try:
         decisions = _json.loads(raw_json)
       except (_json.JSONDecodeError, TypeError):
-        logger.debug(
-            "Could not parse decisions JSON for span %s", span_id
-        )
+        logger.debug("Could not parse decisions JSON for span %s", span_id)
         continue
 
       if not isinstance(decisions, list):
@@ -1992,9 +1937,7 @@ class ContextGraphManager:
         )
         all_dps.append(dp)
 
-        for cidx, cand in enumerate(
-            dec.get("candidates", [])
-        ):
+        for cidx, cand in enumerate(dec.get("candidates", [])):
           candidate_id = f"{decision_id}:c:{cidx}"
           status = cand.get("status", "SELECTED").upper()
           c = Candidate(
@@ -2004,15 +1947,14 @@ class ContextGraphManager:
               name=cand.get("name", ""),
               score=float(cand.get("score", 0.0)),
               status=status,
-              rejection_rationale=cand.get(
-                  "rejection_rationale"
-              ),
+              rejection_rationale=cand.get("rejection_rationale"),
           )
           all_candidates.append(c)
 
     logger.info(
         "AI.GENERATE extracted %d decision points, %d candidates",
-        len(all_dps), len(all_candidates),
+        len(all_dps),
+        len(all_candidates),
     )
     return all_dps, all_candidates
 
@@ -2028,9 +1970,7 @@ class ContextGraphManager:
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ArrayQueryParameter(
-                "session_ids", "STRING", session_ids
-            ),
+            bigquery.ArrayQueryParameter("session_ids", "STRING", session_ids),
         ]
     )
 
@@ -2050,13 +1990,15 @@ class ContextGraphManager:
         continue
       dp_idx = len(all_dps)
       decision_id = f"{session_id}:dp:{span_id}:{dp_idx}"
-      all_dps.append(DecisionPoint(
-          decision_id=decision_id,
-          session_id=session_id,
-          span_id=span_id,
-          decision_type="raw_payload",
-          description=payload[:200],
-      ))
+      all_dps.append(
+          DecisionPoint(
+              decision_id=decision_id,
+              session_id=session_id,
+              span_id=span_id,
+              decision_type="raw_payload",
+              description=payload[:200],
+          )
+      )
 
     return all_dps, []
 
@@ -2087,9 +2029,10 @@ class ContextGraphManager:
       return False
 
     # Delete existing data for idempotency
-    session_ids = list({
-        dp.session_id for dp in decision_points
-    } | {c.session_id for c in candidates})
+    session_ids = list(
+        {dp.session_id for dp in decision_points}
+        | {c.session_id for c in candidates}
+    )
     if session_ids:
       self._delete_decision_data_for_sessions(session_ids)
 
@@ -2145,7 +2088,8 @@ class ContextGraphManager:
 
     logger.info(
         "Stored %d decision points, %d candidates",
-        len(decision_points), len(candidates),
+        len(decision_points),
+        len(candidates),
     )
     return True
 
@@ -2156,9 +2100,7 @@ class ContextGraphManager:
     """Deletes existing decision data for the given sessions."""
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ArrayQueryParameter(
-                "session_ids", "STRING", session_ids
-            ),
+            bigquery.ArrayQueryParameter("session_ids", "STRING", session_ids),
         ]
     )
     fmt = {
@@ -2166,9 +2108,7 @@ class ContextGraphManager:
         "dataset": self.dataset_id,
         "decision_points_table": self.config.decision_points_table,
         "candidates_table": self.config.candidates_table,
-        "made_decision_edges_table": (
-            self.config.made_decision_edges_table
-        ),
+        "made_decision_edges_table": (self.config.made_decision_edges_table),
         "candidate_edges_table": self.config.candidate_edges_table,
     }
     for tmpl in (
@@ -2210,9 +2150,7 @@ class ContextGraphManager:
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ArrayQueryParameter(
-                "session_ids", "STRING", session_ids
-            ),
+            bigquery.ArrayQueryParameter("session_ids", "STRING", session_ids),
         ]
     )
 
@@ -2221,9 +2159,7 @@ class ContextGraphManager:
         "dataset": self.dataset_id,
         "decision_points_table": self.config.decision_points_table,
         "candidates_table": self.config.candidates_table,
-        "made_decision_edges_table": (
-            self.config.made_decision_edges_table
-        ),
+        "made_decision_edges_table": (self.config.made_decision_edges_table),
         "candidate_edges_table": self.config.candidate_edges_table,
     }
 
@@ -2233,9 +2169,7 @@ class ContextGraphManager:
         _DELETE_CANDIDATE_EDGES_FOR_SESSIONS_QUERY,
     ):
       try:
-        job = self.client.query(
-            del_tmpl.format(**fmt), job_config=job_config
-        )
+        job = self.client.query(del_tmpl.format(**fmt), job_config=job_config)
         job.result()
       except Exception as e:
         err_msg = str(e).lower()
@@ -2265,9 +2199,7 @@ class ContextGraphManager:
       logger.warning("Failed to insert CandidateEdge edges: %s", e)
       return False
 
-    logger.info(
-        "Decision edges created for %d sessions", len(session_ids)
-    )
+    logger.info("Decision edges created for %d sessions", len(session_ids))
     return True
 
   def get_decision_property_graph_ddl(
@@ -2294,9 +2226,7 @@ class ContextGraphManager:
         cross_links_table=self.config.cross_links_table,
         decision_points_table=self.config.decision_points_table,
         candidates_table=self.config.candidates_table,
-        made_decision_edges_table=(
-            self.config.made_decision_edges_table
-        ),
+        made_decision_edges_table=(self.config.made_decision_edges_table),
         candidate_edges_table=self.config.candidate_edges_table,
         graph_name=name,
     )
@@ -2329,9 +2259,7 @@ class ContextGraphManager:
 
     decision_type_clause = ""
     if decision_type:
-      decision_type_clause = (
-          "AND dp.decision_type = @decision_type"
-      )
+      decision_type_clause = "AND dp.decision_type = @decision_type"
 
     return _GQL_EU_AUDIT_QUERY.format(
         project=self.project_id,
@@ -2381,9 +2309,7 @@ class ContextGraphManager:
     )
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ScalarQueryParameter(
-                "session_id", "STRING", session_id
-            ),
+            bigquery.ScalarQueryParameter("session_id", "STRING", session_id),
         ]
     )
     try:
@@ -2402,7 +2328,8 @@ class ContextGraphManager:
     except Exception as e:
       logger.warning(
           "Failed to get decision points for session %s: %s",
-          session_id, e,
+          session_id,
+          e,
       )
       return []
 
@@ -2425,9 +2352,7 @@ class ContextGraphManager:
     )
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ScalarQueryParameter(
-                "decision_id", "STRING", decision_id
-            ),
+            bigquery.ScalarQueryParameter("decision_id", "STRING", decision_id),
         ]
     )
     try:
@@ -2448,7 +2373,8 @@ class ContextGraphManager:
     except Exception as e:
       logger.warning(
           "Failed to get candidates for decision %s: %s",
-          decision_id, e,
+          decision_id,
+          e,
       )
       return []
 
@@ -2479,29 +2405,30 @@ class ContextGraphManager:
     for dp in decision_points:
       candidates = self.get_candidates_for_decision(dp.decision_id)
       if not include_dropped:
-        candidates = [
-            c for c in candidates if c.status == "SELECTED"
-        ]
+        candidates = [c for c in candidates if c.status == "SELECTED"]
 
-      trail.append({
-          "decision_id": dp.decision_id,
-          "decision_type": dp.decision_type,
-          "description": dp.description,
-          "span_id": dp.span_id,
-          "candidates": [
-              {
-                  "candidate_id": c.candidate_id,
-                  "name": c.name,
-                  "score": c.score,
-                  "status": c.status,
-                  "rejection_rationale": c.rejection_rationale,
-              }
-              for c in candidates
-          ],
-      })
+      trail.append(
+          {
+              "decision_id": dp.decision_id,
+              "decision_type": dp.decision_type,
+              "description": dp.description,
+              "span_id": dp.span_id,
+              "candidates": [
+                  {
+                      "candidate_id": c.candidate_id,
+                      "name": c.name,
+                      "score": c.score,
+                      "status": c.status,
+                      "rejection_rationale": c.rejection_rationale,
+                  }
+                  for c in candidates
+              ],
+          }
+      )
 
     if format == "json":
       import json
+
       return json.dumps(trail, indent=2, default=str)
     return trail
 
@@ -2537,9 +2464,7 @@ class ContextGraphManager:
     results: dict[str, Any] = {}
 
     # Step 1: Extract biz nodes
-    nodes = self.extract_biz_nodes(
-        session_ids, use_ai_generate=use_ai_generate
-    )
+    nodes = self.extract_biz_nodes(session_ids, use_ai_generate=use_ai_generate)
     results["biz_nodes_count"] = len(nodes)
     results["biz_nodes"] = nodes
 

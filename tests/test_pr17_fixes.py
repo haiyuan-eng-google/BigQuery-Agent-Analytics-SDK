@@ -42,8 +42,7 @@ from bigquery_agent_analytics.client import _apply_strict_mode
 from bigquery_agent_analytics.client import Client
 from bigquery_agent_analytics.evaluators import EvaluationReport
 from bigquery_agent_analytics.evaluators import SessionScore
-from bigquery_agent_analytics.feedback import \
-  _AI_GENERATE_SEMANTIC_GROUPING_QUERY
+from bigquery_agent_analytics.feedback import _AI_GENERATE_SEMANTIC_GROUPING_QUERY
 from bigquery_agent_analytics.feedback import _is_legacy_model_ref
 from bigquery_agent_analytics.feedback import _LEGACY_SEMANTIC_GROUPING_QUERY
 from bigquery_agent_analytics.feedback import _sanitize_categories

@@ -16,8 +16,7 @@
 
 import pytest
 
-from bigquery_agent_analytics.feedback import \
-  _AI_GENERATE_SEMANTIC_GROUPING_QUERY
+from bigquery_agent_analytics.feedback import _AI_GENERATE_SEMANTIC_GROUPING_QUERY
 from bigquery_agent_analytics.feedback import AnalysisConfig
 from bigquery_agent_analytics.feedback import DriftReport
 from bigquery_agent_analytics.feedback import QuestionCategory
