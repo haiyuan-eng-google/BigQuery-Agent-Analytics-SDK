@@ -27,6 +27,11 @@ from bigquery_agent_analytics.cli import app
 from bigquery_agent_analytics.evaluators import EvaluationReport
 from bigquery_agent_analytics.evaluators import LLMAsJudge
 from bigquery_agent_analytics.evaluators import SessionScore
+from bigquery_agent_analytics.feedback import DriftReport
+from bigquery_agent_analytics.feedback import QuestionDistribution
+from bigquery_agent_analytics.insights import AggregatedInsights
+from bigquery_agent_analytics.insights import InsightsReport
+from bigquery_agent_analytics.insights import SessionMetadata
 from bigquery_agent_analytics.trace import Span
 from bigquery_agent_analytics.trace import Trace
 
@@ -534,3 +539,497 @@ class TestDefaultThresholds:
         ],
     )
     assert result.exit_code == 0
+
+
+# ------------------------------------------------------------------ #
+# Helpers for v1.1 commands                                            #
+# ------------------------------------------------------------------ #
+
+
+def _mock_insights():
+  meta = SessionMetadata(
+      session_id="s1",
+      event_count=10,
+      tool_calls=3,
+      tool_errors=0,
+      llm_calls=5,
+      turn_count=2,
+      total_latency_ms=1200.0,
+      avg_latency_ms=600.0,
+      agents_used=["bot"],
+      tools_used=["search"],
+      has_error=False,
+      hitl_events=0,
+      state_changes=0,
+      start_time=_NOW,
+      end_time=_NOW,
+  )
+  return InsightsReport(
+      created_at=_NOW,
+      session_metadata=[meta],
+      aggregated=AggregatedInsights(
+          total_sessions=1,
+          success_rate=1.0,
+          avg_effectiveness=0.9,
+          avg_latency_ms=1200.0,
+          avg_turns=2.0,
+          error_rate=0.0,
+      ),
+      executive_summary="All good.",
+  )
+
+
+def _mock_drift():
+  return DriftReport(
+      coverage_percentage=0.85,
+      total_golden=100,
+      total_production=200,
+  )
+
+
+def _mock_distribution():
+  return QuestionDistribution(total_questions=50)
+
+
+# ------------------------------------------------------------------ #
+# insights                                                             #
+# ------------------------------------------------------------------ #
+
+
+class TestInsights:
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_insights_json(self, mock_build):
+    client = MagicMock()
+    client.insights.return_value = _mock_insights()
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "insights",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert "aggregated" in parsed
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_insights_with_filters(self, mock_build):
+    client = MagicMock()
+    client.insights.return_value = _mock_insights()
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "insights",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--agent-id=bot",
+            "--last=1h",
+            "--max-sessions=25",
+        ],
+    )
+    assert result.exit_code == 0
+    call_kwargs = client.insights.call_args[1]
+    assert call_kwargs["filters"].agent_id == "bot"
+    assert call_kwargs["config"].max_sessions == 25
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_insights_error_exit_2(self, mock_build):
+    client = MagicMock()
+    client.insights.side_effect = RuntimeError("fail")
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "insights",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 2
+
+
+# ------------------------------------------------------------------ #
+# drift                                                                #
+# ------------------------------------------------------------------ #
+
+
+class TestDrift:
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_drift_json(self, mock_build):
+    client = MagicMock()
+    client.drift_detection.return_value = _mock_drift()
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "drift",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--golden-dataset=golden",
+        ],
+    )
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["coverage_percentage"] == 0.85
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_drift_with_filters(self, mock_build):
+    client = MagicMock()
+    client.drift_detection.return_value = _mock_drift()
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "drift",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--golden-dataset=golden",
+            "--agent-id=bot",
+            "--last=24h",
+        ],
+    )
+    assert result.exit_code == 0
+    call_kwargs = client.drift_detection.call_args[1]
+    assert call_kwargs["golden_dataset"] == "golden"
+    assert call_kwargs["filters"].agent_id == "bot"
+
+  def test_drift_missing_golden_dataset_exit_2(self):
+    result = runner.invoke(
+        app,
+        [
+            "drift",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 2
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_drift_error_exit_2(self, mock_build):
+    client = MagicMock()
+    client.drift_detection.side_effect = RuntimeError("fail")
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "drift",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--golden-dataset=golden",
+        ],
+    )
+    assert result.exit_code == 2
+
+
+# ------------------------------------------------------------------ #
+# distribution                                                         #
+# ------------------------------------------------------------------ #
+
+
+class TestDistribution:
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_distribution_json(self, mock_build):
+    client = MagicMock()
+    client.deep_analysis.return_value = _mock_distribution()
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "distribution",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["total_questions"] == 50
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_distribution_with_options(self, mock_build):
+    client = MagicMock()
+    client.deep_analysis.return_value = _mock_distribution()
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "distribution",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--mode=frequently_asked",
+            "--top-k=10",
+        ],
+    )
+    assert result.exit_code == 0
+    call_kwargs = client.deep_analysis.call_args[1]
+    assert call_kwargs["configuration"].mode == "frequently_asked"
+    assert call_kwargs["configuration"].top_k == 10
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_distribution_error_exit_2(self, mock_build):
+    client = MagicMock()
+    client.deep_analysis.side_effect = RuntimeError("fail")
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "distribution",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 2
+
+
+# ------------------------------------------------------------------ #
+# hitl-metrics                                                         #
+# ------------------------------------------------------------------ #
+
+
+class TestHitlMetrics:
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_hitl_metrics_json(self, mock_build):
+    client = MagicMock()
+    client.hitl_metrics.return_value = {
+        "total_hitl_events": 15,
+        "sessions_with_hitl": 3,
+    }
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "hitl-metrics",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["total_hitl_events"] == 15
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_hitl_metrics_with_filters(self, mock_build):
+    client = MagicMock()
+    client.hitl_metrics.return_value = {"total_hitl_events": 5}
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "hitl-metrics",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--agent-id=bot",
+            "--last=7d",
+        ],
+    )
+    assert result.exit_code == 0
+    call_kwargs = client.hitl_metrics.call_args[1]
+    assert call_kwargs["filters"].agent_id == "bot"
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_hitl_metrics_error_exit_2(self, mock_build):
+    client = MagicMock()
+    client.hitl_metrics.side_effect = RuntimeError("fail")
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "hitl-metrics",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 2
+
+
+# ------------------------------------------------------------------ #
+# list-traces                                                          #
+# ------------------------------------------------------------------ #
+
+
+class TestListTraces:
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_list_traces_json(self, mock_build):
+    client = MagicMock()
+    client.list_traces.return_value = [_mock_trace(), _mock_trace()]
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "list-traces",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert isinstance(parsed, list)
+    assert len(parsed) == 2
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_list_traces_with_filters(self, mock_build):
+    client = MagicMock()
+    client.list_traces.return_value = [_mock_trace()]
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "list-traces",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--session-id=s1",
+            "--agent-id=bot",
+            "--last=1h",
+            "--limit=10",
+        ],
+    )
+    assert result.exit_code == 0
+    call_kwargs = client.list_traces.call_args[1]
+    filters = call_kwargs["filter_criteria"]
+    assert filters.agent_id == "bot"
+    assert filters.limit == 10
+    assert filters.session_ids == ["s1"]
+
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_list_traces_error_exit_2(self, mock_build):
+    client = MagicMock()
+    client.list_traces.side_effect = RuntimeError("fail")
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "list-traces",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 2
+
+
+# ------------------------------------------------------------------ #
+# views create-all / views create                                      #
+# ------------------------------------------------------------------ #
+
+
+class TestViews:
+
+  @patch("bigquery_agent_analytics.cli._build_view_manager")
+  def test_views_create_all(self, mock_build_vm):
+    vm = MagicMock()
+    vm.create_all_views.return_value = {
+        "LLM_REQUEST": "adk_llm_request",
+        "TOOL_CALL": "adk_tool_call",
+    }
+    mock_build_vm.return_value = vm
+
+    result = runner.invoke(
+        app,
+        [
+            "views",
+            "create-all",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["LLM_REQUEST"] == "adk_llm_request"
+
+  @patch("bigquery_agent_analytics.cli._build_view_manager")
+  def test_views_create_all_with_prefix(self, mock_build_vm):
+    vm = MagicMock()
+    vm.create_all_views.return_value = {}
+    mock_build_vm.return_value = vm
+
+    result = runner.invoke(
+        app,
+        [
+            "views",
+            "create-all",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--prefix=custom_",
+        ],
+    )
+    assert result.exit_code == 0
+    mock_build_vm.assert_called_once()
+    call_args = mock_build_vm.call_args
+    assert (
+        call_args[0][3] == "custom_" or call_args[1].get("prefix") == "custom_"
+    )
+
+  @patch("bigquery_agent_analytics.cli._build_view_manager")
+  def test_views_create_single(self, mock_build_vm):
+    vm = MagicMock()
+    mock_build_vm.return_value = vm
+
+    result = runner.invoke(
+        app,
+        [
+            "views",
+            "create",
+            "LLM_REQUEST",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 0
+    vm.create_view.assert_called_once_with("LLM_REQUEST")
+    assert "LLM_REQUEST" in result.output
+
+  @patch("bigquery_agent_analytics.cli._build_view_manager")
+  def test_views_create_all_error_exit_2(self, mock_build_vm):
+    vm = MagicMock()
+    vm.create_all_views.side_effect = RuntimeError("fail")
+    mock_build_vm.return_value = vm
+
+    result = runner.invoke(
+        app,
+        [
+            "views",
+            "create-all",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 2
+
+  @patch("bigquery_agent_analytics.cli._build_view_manager")
+  def test_views_create_error_exit_2(self, mock_build_vm):
+    vm = MagicMock()
+    vm.create_view.side_effect = RuntimeError("fail")
+    mock_build_vm.return_value = vm
+
+    result = runner.invoke(
+        app,
+        [
+            "views",
+            "create",
+            "BOGUS",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 2

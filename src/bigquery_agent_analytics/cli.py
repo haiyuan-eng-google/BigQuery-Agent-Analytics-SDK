@@ -19,6 +19,13 @@ Usage::
     bq-agent-sdk doctor --project-id=P --dataset-id=D
     bq-agent-sdk get-trace --project-id=P --dataset-id=D --session-id=S
     bq-agent-sdk evaluate --project-id=P --dataset-id=D --evaluator=latency
+    bq-agent-sdk insights --project-id=P --dataset-id=D
+    bq-agent-sdk drift --project-id=P --dataset-id=D --golden-dataset=G
+    bq-agent-sdk distribution --project-id=P --dataset-id=D
+    bq-agent-sdk hitl-metrics --project-id=P --dataset-id=D
+    bq-agent-sdk list-traces --project-id=P --dataset-id=D
+    bq-agent-sdk views create-all --project-id=P --dataset-id=D
+    bq-agent-sdk views create --project-id=P --dataset-id=D EVENT_TYPE
 """
 
 from __future__ import annotations
@@ -284,6 +291,298 @@ def evaluate(
       raise typer.Exit(code=1)
   except typer.Exit:
     raise
+  except Exception as exc:
+    typer.echo(f"Error: {exc}", err=True)
+    raise typer.Exit(code=2)
+
+
+@app.command()
+def insights(
+    project_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_PROJECT", help=_PROJECT_HELP
+    ),
+    dataset_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
+    ),
+    table_id: str = typer.Option("agent_events", help="Events table name."),
+    location: str = typer.Option("us-central1", help="BQ location."),
+    agent_id: Optional[str] = typer.Option(None, help="Filter by agent name."),
+    last: Optional[str] = typer.Option(
+        None,
+        help="Time window: 30m, 1h, 24h, 7d, 30d.",
+    ),
+    limit: int = typer.Option(100, help="Max sessions to analyze."),
+    max_sessions: int = typer.Option(
+        50, help="Max sessions for insights pipeline."
+    ),
+    fmt: str = typer.Option(
+        "json",
+        "--format",
+        help="Output format: json|text|table.",
+    ),
+) -> None:
+  """Generate an insights report over recent traces."""
+  try:
+    from .insights import InsightsConfig
+
+    filters = TraceFilter.from_cli_args(
+        last=last,
+        agent_id=agent_id,
+        limit=limit,
+    )
+    config = InsightsConfig(max_sessions=max_sessions)
+    client = _build_client(project_id, dataset_id, table_id, location)
+    report = client.insights(filters=filters, config=config)
+    typer.echo(format_output(report, fmt))
+  except Exception as exc:
+    typer.echo(f"Error: {exc}", err=True)
+    raise typer.Exit(code=2)
+
+
+@app.command()
+def drift(
+    project_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_PROJECT", help=_PROJECT_HELP
+    ),
+    dataset_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
+    ),
+    table_id: str = typer.Option("agent_events", help="Events table name."),
+    location: str = typer.Option("us-central1", help="BQ location."),
+    golden_dataset: str = typer.Option(
+        ..., help="Golden dataset name for comparison."
+    ),
+    agent_id: Optional[str] = typer.Option(None, help="Filter by agent name."),
+    last: Optional[str] = typer.Option(
+        None,
+        help="Time window: 30m, 1h, 24h, 7d, 30d.",
+    ),
+    limit: int = typer.Option(100, help="Max sessions."),
+    fmt: str = typer.Option(
+        "json",
+        "--format",
+        help="Output format: json|text|table.",
+    ),
+) -> None:
+  """Detect drift between golden and production datasets."""
+  try:
+    filters = TraceFilter.from_cli_args(
+        last=last,
+        agent_id=agent_id,
+        limit=limit,
+    )
+    client = _build_client(project_id, dataset_id, table_id, location)
+    report = client.drift_detection(
+        golden_dataset=golden_dataset,
+        filters=filters,
+    )
+    typer.echo(format_output(report, fmt))
+  except Exception as exc:
+    typer.echo(f"Error: {exc}", err=True)
+    raise typer.Exit(code=2)
+
+
+@app.command()
+def distribution(
+    project_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_PROJECT", help=_PROJECT_HELP
+    ),
+    dataset_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
+    ),
+    table_id: str = typer.Option("agent_events", help="Events table name."),
+    location: str = typer.Option("us-central1", help="BQ location."),
+    agent_id: Optional[str] = typer.Option(None, help="Filter by agent name."),
+    last: Optional[str] = typer.Option(
+        None,
+        help="Time window: 30m, 1h, 24h, 7d, 30d.",
+    ),
+    limit: int = typer.Option(100, help="Max sessions."),
+    mode: str = typer.Option(
+        "auto_group_using_semantics",
+        help=(
+            "Analysis mode: frequently_asked|frequently_unanswered|"
+            "auto_group_using_semantics|custom."
+        ),
+    ),
+    top_k: int = typer.Option(20, help="Top items per category."),
+    fmt: str = typer.Option(
+        "json",
+        "--format",
+        help="Output format: json|text|table.",
+    ),
+) -> None:
+  """Analyze question distribution across sessions."""
+  try:
+    from .feedback import AnalysisConfig
+
+    filters = TraceFilter.from_cli_args(
+        last=last,
+        agent_id=agent_id,
+        limit=limit,
+    )
+    config = AnalysisConfig(mode=mode, top_k=top_k)
+    client = _build_client(project_id, dataset_id, table_id, location)
+    report = client.deep_analysis(
+        filters=filters,
+        configuration=config,
+    )
+    typer.echo(format_output(report, fmt))
+  except Exception as exc:
+    typer.echo(f"Error: {exc}", err=True)
+    raise typer.Exit(code=2)
+
+
+@app.command("hitl-metrics")
+def hitl_metrics(
+    project_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_PROJECT", help=_PROJECT_HELP
+    ),
+    dataset_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
+    ),
+    table_id: str = typer.Option("agent_events", help="Events table name."),
+    location: str = typer.Option("us-central1", help="BQ location."),
+    agent_id: Optional[str] = typer.Option(None, help="Filter by agent name."),
+    last: Optional[str] = typer.Option(
+        None,
+        help="Time window: 30m, 1h, 24h, 7d, 30d.",
+    ),
+    limit: int = typer.Option(100, help="Max sessions."),
+    fmt: str = typer.Option(
+        "json",
+        "--format",
+        help="Output format: json|text|table.",
+    ),
+) -> None:
+  """Display human-in-the-loop interaction metrics."""
+  try:
+    filters = TraceFilter.from_cli_args(
+        last=last,
+        agent_id=agent_id,
+        limit=limit,
+    )
+    client = _build_client(project_id, dataset_id, table_id, location)
+    result = client.hitl_metrics(filters=filters)
+    typer.echo(format_output(result, fmt))
+  except Exception as exc:
+    typer.echo(f"Error: {exc}", err=True)
+    raise typer.Exit(code=2)
+
+
+@app.command("list-traces")
+def list_traces(
+    project_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_PROJECT", help=_PROJECT_HELP
+    ),
+    dataset_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
+    ),
+    table_id: str = typer.Option("agent_events", help="Events table name."),
+    location: str = typer.Option("us-central1", help="BQ location."),
+    session_id: Optional[str] = typer.Option(
+        None, help="Filter by session ID."
+    ),
+    agent_id: Optional[str] = typer.Option(None, help="Filter by agent name."),
+    last: Optional[str] = typer.Option(
+        None,
+        help="Time window: 30m, 1h, 24h, 7d, 30d.",
+    ),
+    limit: int = typer.Option(100, help="Max traces to list."),
+    fmt: str = typer.Option(
+        "json",
+        "--format",
+        help="Output format: json|text|table.",
+    ),
+) -> None:
+  """List traces matching filter criteria."""
+  try:
+    filters = TraceFilter.from_cli_args(
+        last=last,
+        agent_id=agent_id,
+        session_id=session_id,
+        limit=limit,
+    )
+    client = _build_client(project_id, dataset_id, table_id, location)
+    traces = client.list_traces(filter_criteria=filters)
+    typer.echo(format_output(traces, fmt))
+  except Exception as exc:
+    typer.echo(f"Error: {exc}", err=True)
+    raise typer.Exit(code=2)
+
+
+# ------------------------------------------------------------------ #
+# views sub-commands                                                   #
+# ------------------------------------------------------------------ #
+
+views_app = typer.Typer(
+    name="views",
+    help="Manage per-event-type BigQuery views.",
+    add_completion=False,
+)
+app.add_typer(views_app, name="views")
+
+
+def _build_view_manager(
+    project_id: str,
+    dataset_id: str,
+    table_id: str,
+    prefix: str,
+):
+  """Lazily import ViewManager and construct an instance."""
+  from .views import ViewManager
+
+  return ViewManager(
+      project_id=project_id,
+      dataset_id=dataset_id,
+      table_id=table_id,
+      view_prefix=prefix,
+  )
+
+
+@views_app.command("create-all")
+def views_create_all(
+    project_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_PROJECT", help=_PROJECT_HELP
+    ),
+    dataset_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
+    ),
+    table_id: str = typer.Option("agent_events", help="Events table name."),
+    prefix: str = typer.Option("adk_", help="View name prefix."),
+    fmt: str = typer.Option(
+        "json",
+        "--format",
+        help="Output format: json|text|table.",
+    ),
+) -> None:
+  """Create views for all supported event types."""
+  try:
+    vm = _build_view_manager(project_id, dataset_id, table_id, prefix)
+    result = vm.create_all_views()
+    typer.echo(format_output(result, fmt))
+  except Exception as exc:
+    typer.echo(f"Error: {exc}", err=True)
+    raise typer.Exit(code=2)
+
+
+@views_app.command("create")
+def views_create(
+    event_type: str = typer.Argument(help="Event type to create a view for."),
+    project_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_PROJECT", help=_PROJECT_HELP
+    ),
+    dataset_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
+    ),
+    table_id: str = typer.Option("agent_events", help="Events table name."),
+    prefix: str = typer.Option("adk_", help="View name prefix."),
+) -> None:
+  """Create a view for a single event type."""
+  try:
+    vm = _build_view_manager(project_id, dataset_id, table_id, prefix)
+    vm.create_view(event_type)
+    typer.echo(f"View created for {event_type}.")
   except Exception as exc:
     typer.echo(f"Error: {exc}", err=True)
     raise typer.Exit(code=2)
