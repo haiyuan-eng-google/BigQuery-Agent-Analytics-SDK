@@ -474,3 +474,63 @@ class TestAllEvaluators:
         ],
     )
     assert result.exit_code == 0
+
+
+# ------------------------------------------------------------------ #
+# default thresholds                                                   #
+# ------------------------------------------------------------------ #
+
+
+class TestDefaultThresholds:
+
+  @pytest.mark.parametrize(
+      "name",
+      [
+          "latency",
+          "error_rate",
+          "turn_count",
+          "token_efficiency",
+          "ttft",
+          "cost",
+      ],
+  )
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_code_evaluator_uses_sdk_default(self, mock_build, name):
+    """Omitting --threshold should use the SDK's built-in default."""
+    client = MagicMock()
+    client.evaluate.return_value = _mock_report(10, 10)
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            f"--evaluator={name}",
+        ],
+    )
+    assert result.exit_code == 0
+
+  @pytest.mark.parametrize(
+      "criterion",
+      ["correctness", "hallucination", "sentiment"],
+  )
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_llm_judge_uses_sdk_default(self, mock_build, criterion):
+    """Omitting --threshold for llm-judge should use 0.5, not 5000."""
+    client = MagicMock()
+    client.evaluate.return_value = _mock_report(10, 10)
+    mock_build.return_value = client
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--evaluator=llm-judge",
+            f"--criterion={criterion}",
+        ],
+    )
+    assert result.exit_code == 0

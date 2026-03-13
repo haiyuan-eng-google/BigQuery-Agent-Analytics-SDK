@@ -75,28 +75,45 @@ def _build_client(
 # ------------------------------------------------------------------ #
 
 _CODE_EVALUATORS = {
-    "latency": lambda t: CodeEvaluator.latency(threshold_ms=t),
-    "error_rate": lambda t: CodeEvaluator.error_rate(
-        max_error_rate=t,
+    "latency": (
+        lambda t: CodeEvaluator.latency(threshold_ms=t),
+        lambda: CodeEvaluator.latency(),
     ),
-    "turn_count": lambda t: CodeEvaluator.turn_count(
-        max_turns=int(t),
+    "error_rate": (
+        lambda t: CodeEvaluator.error_rate(max_error_rate=t),
+        lambda: CodeEvaluator.error_rate(),
     ),
-    "token_efficiency": lambda t: CodeEvaluator.token_efficiency(
-        max_tokens=int(t),
+    "turn_count": (
+        lambda t: CodeEvaluator.turn_count(max_turns=int(t)),
+        lambda: CodeEvaluator.turn_count(),
     ),
-    "ttft": lambda t: CodeEvaluator.ttft(threshold_ms=t),
-    "cost": lambda t: CodeEvaluator.cost_per_session(
-        max_cost_usd=t,
+    "token_efficiency": (
+        lambda t: CodeEvaluator.token_efficiency(max_tokens=int(t)),
+        lambda: CodeEvaluator.token_efficiency(),
+    ),
+    "ttft": (
+        lambda t: CodeEvaluator.ttft(threshold_ms=t),
+        lambda: CodeEvaluator.ttft(),
+    ),
+    "cost": (
+        lambda t: CodeEvaluator.cost_per_session(max_cost_usd=t),
+        lambda: CodeEvaluator.cost_per_session(),
     ),
 }
 
 _LLM_JUDGES = {
-    "correctness": lambda t: LLMAsJudge.correctness(threshold=t),
-    "hallucination": lambda t: LLMAsJudge.hallucination(
-        threshold=t,
+    "correctness": (
+        lambda t: LLMAsJudge.correctness(threshold=t),
+        lambda: LLMAsJudge.correctness(),
     ),
-    "sentiment": lambda t: LLMAsJudge.sentiment(threshold=t),
+    "hallucination": (
+        lambda t: LLMAsJudge.hallucination(threshold=t),
+        lambda: LLMAsJudge.hallucination(),
+    ),
+    "sentiment": (
+        lambda t: LLMAsJudge.sentiment(threshold=t),
+        lambda: LLMAsJudge.sentiment(),
+    ),
 }
 
 
@@ -187,7 +204,9 @@ def evaluate(
             "token_efficiency|ttft|cost|llm-judge."
         ),
     ),
-    threshold: float = typer.Option(5000.0, help="Pass/fail threshold."),
+    threshold: Optional[float] = typer.Option(
+        None, help="Pass/fail threshold (uses evaluator default if omitted)."
+    ),
     criterion: str = typer.Option(
         "correctness",
         help=("LLM judge criterion: " "correctness|hallucination|sentiment."),
@@ -230,23 +249,25 @@ def evaluate(
     )
 
     if evaluator == "llm-judge":
-      factory = _LLM_JUDGES.get(criterion)
-      if not factory:
+      entry = _LLM_JUDGES.get(criterion)
+      if not entry:
         typer.echo(
             f"Error: unknown criterion: {criterion!r}.",
             err=True,
         )
         raise typer.Exit(code=2)
-      ev = factory(threshold)
+      with_t, without_t = entry
+      ev = with_t(threshold) if threshold is not None else without_t()
     else:
-      factory = _CODE_EVALUATORS.get(evaluator)
-      if not factory:
+      entry = _CODE_EVALUATORS.get(evaluator)
+      if not entry:
         typer.echo(
             f"Error: unknown evaluator: {evaluator!r}.",
             err=True,
         )
         raise typer.Exit(code=2)
-      ev = factory(threshold)
+      with_t, without_t = entry
+      ev = with_t(threshold) if threshold is not None else without_t()
 
     client = _build_client(
         project_id,
