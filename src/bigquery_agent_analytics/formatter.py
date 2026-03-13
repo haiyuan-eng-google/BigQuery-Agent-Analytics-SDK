@@ -24,6 +24,8 @@ Supports three modes:
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 from typing import Any
 
@@ -64,11 +66,18 @@ def _format_json(obj: Any) -> str:
 
 
 def _format_text(obj: Any) -> str:
-  """Use .summary() or .render() when available, else JSON."""
+  """Use .summary() or .render() when available, else JSON.
+
+  When calling ``.render()`` (e.g. on ``Trace``), stdout is
+  suppressed because ``Trace.render()`` both prints and returns
+  the same string.  The caller of ``format_output`` is
+  responsible for printing the returned value.
+  """
   if hasattr(obj, "summary") and callable(obj.summary):
     return obj.summary()
   if hasattr(obj, "render") and callable(obj.render):
-    return obj.render()
+    with contextlib.redirect_stdout(io.StringIO()):
+      return obj.render()
   return _format_json(obj)
 
 
@@ -88,7 +97,12 @@ def _dict_list_to_table(rows: list[dict[str, Any]]) -> str:
   """Render a list of dicts as a text table."""
   if not rows:
     return ""
-  headers = list(rows[0].keys())
+  # Collect all keys across all rows to handle heterogeneous dicts.
+  seen: dict[str, None] = {}
+  for row in rows:
+    for k in row:
+      seen.setdefault(k, None)
+  headers = list(seen)
   col_widths: dict[str, int] = {}
   for h in headers:
     max_val = max(

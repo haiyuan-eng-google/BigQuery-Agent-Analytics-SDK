@@ -16,7 +16,9 @@
 
 from datetime import datetime
 from datetime import timezone
+import io
 import json
+import sys
 
 import pytest
 
@@ -79,6 +81,32 @@ class TestFormatText:
     # .summary() includes the evaluator name
     assert "latency" in out
 
+  def test_trace_render_no_double_print(self):
+    trace = Trace(
+        trace_id="t1",
+        session_id="s1",
+        spans=[
+            Span(
+                event_type="LLM_REQUEST",
+                agent=None,
+                timestamp=_NOW,
+                content={},
+                attributes={},
+            )
+        ],
+    )
+    captured = io.StringIO()
+    old_stdout = sys.stdout
+    sys.stdout = captured
+    try:
+      out = format_output(trace, "text")
+    finally:
+      sys.stdout = old_stdout
+    # render() should NOT leak to stdout
+    assert captured.getvalue() == ""
+    # but the returned string should have the trace content
+    assert "t1" in out
+
   def test_fallback_to_json(self):
     out = format_output({"plain": "dict"}, "text")
     parsed = json.loads(out)
@@ -104,6 +132,19 @@ class TestFormatTable:
     out = format_output({"key": "val", "num": 42}, "table")
     assert "key" in out
     assert "val" in out
+
+  def test_heterogeneous_rows_include_all_columns(self):
+    data = [
+        {"a": 1},
+        {"a": 2, "b": 3},
+    ]
+    out = format_output(data, "table")
+    lines = out.strip().split("\n")
+    # Header must include both "a" and "b"
+    assert "a" in lines[0]
+    assert "b" in lines[0]
+    # Second data row should show value for "b"
+    assert "3" in lines[3]
 
   def test_empty_list(self):
     out = format_output([], "table")
