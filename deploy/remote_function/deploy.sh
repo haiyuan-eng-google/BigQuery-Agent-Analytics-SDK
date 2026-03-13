@@ -53,7 +53,7 @@ STAGING="$(mktemp -d)"
 trap 'rm -rf "$STAGING"' EXIT
 
 echo "==> Building SDK wheel..."
-python -m pip wheel --no-deps --wheel-dir "$STAGING" "$REPO_ROOT" -q
+python3 -m pip wheel --no-deps --wheel-dir "$STAGING" "$REPO_ROOT" -q
 
 echo "==> Staging deployment bundle..."
 cp "$SCRIPT_DIR/main.py" "$SCRIPT_DIR/dispatch.py" "$STAGING/"
@@ -76,7 +76,7 @@ gcloud functions deploy bq-agent-analytics \
   --entry-point handle_request \
   --source "$STAGING" \
   --trigger-http --no-allow-unauthenticated \
-  --set-env-vars "BQ_AGENT_PROJECT=$PROJECT,BQ_AGENT_DATASET=$DATASET" \
+  --set-env-vars "BQ_AGENT_PROJECT=$PROJECT,BQ_AGENT_DATASET=$DATASET,BQ_AGENT_LOCATION=$BQ_LOCATION" \
   --memory 512MB --timeout 120s --min-instances 0
 
 # ------------------------------------------------------------------ #
