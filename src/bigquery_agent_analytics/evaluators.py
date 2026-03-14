@@ -44,6 +44,8 @@ from typing import Any, Callable, Optional
 from pydantic import BaseModel
 from pydantic import Field
 
+from bigquery_agent_analytics import udf_kernels
+
 logger = logging.getLogger("bigquery_agent_analytics." + __name__)
 
 DEFAULT_ENDPOINT = "gemini-2.5-flash"
@@ -240,12 +242,7 @@ class CodeEvaluator:
     """
 
     def _score(s: dict[str, Any]) -> float:
-      avg = s.get("avg_latency_ms", 0)
-      if avg <= 0:
-        return 1.0
-      if avg >= threshold_ms:
-        return 0.0
-      return 1.0 - (avg / threshold_ms)
+      return udf_kernels.score_latency(s.get("avg_latency_ms", 0), threshold_ms)
 
     evaluator = CodeEvaluator(name="latency_evaluator")
     evaluator.add_metric("latency", _score, threshold=0.5)
@@ -263,12 +260,7 @@ class CodeEvaluator:
     """
 
     def _score(s: dict[str, Any]) -> float:
-      turns = s.get("turn_count", 0)
-      if turns <= 0:
-        return 1.0
-      if turns >= max_turns:
-        return 0.0
-      return 1.0 - (turns / max_turns)
+      return udf_kernels.score_turn_count(s.get("turn_count", 0), max_turns)
 
     evaluator = CodeEvaluator(name="turn_count_evaluator")
     evaluator.add_metric("turn_count", _score, threshold=0.5)
@@ -288,14 +280,11 @@ class CodeEvaluator:
     """
 
     def _score(s: dict[str, Any]) -> float:
-      calls = s.get("tool_calls", 0)
-      errors = s.get("tool_errors", 0)
-      if calls <= 0:
-        return 1.0
-      rate = errors / calls
-      if rate >= max_error_rate:
-        return 0.0
-      return 1.0 - (rate / max_error_rate)
+      return udf_kernels.score_error_rate(
+          s.get("tool_calls", 0),
+          s.get("tool_errors", 0),
+          max_error_rate,
+      )
 
     evaluator = CodeEvaluator(name="error_rate_evaluator")
     evaluator.add_metric("error_rate", _score, threshold=0.5)
@@ -315,12 +304,9 @@ class CodeEvaluator:
     """
 
     def _score(s: dict[str, Any]) -> float:
-      total = s.get("total_tokens", 0)
-      if total <= 0:
-        return 1.0
-      if total >= max_tokens:
-        return 0.0
-      return 1.0 - (total / max_tokens)
+      return udf_kernels.score_token_efficiency(
+          s.get("total_tokens", 0), max_tokens
+      )
 
     evaluator = CodeEvaluator(name="token_efficiency_evaluator")
     evaluator.add_metric("token_efficiency", _score, threshold=0.5)
@@ -340,12 +326,7 @@ class CodeEvaluator:
     """
 
     def _score(s: dict[str, Any]) -> float:
-      avg = s.get("avg_ttft_ms", 0) or 0
-      if avg <= 0:
-        return 1.0
-      if avg >= threshold_ms:
-        return 0.0
-      return 1.0 - (avg / threshold_ms)
+      return udf_kernels.score_ttft(s.get("avg_ttft_ms", 0) or 0, threshold_ms)
 
     evaluator = CodeEvaluator(name="ttft_evaluator")
     evaluator.add_metric("ttft", _score, threshold=0.5)
@@ -369,16 +350,13 @@ class CodeEvaluator:
     """
 
     def _score(s: dict[str, Any]) -> float:
-      input_t = s.get("input_tokens", 0)
-      output_t = s.get("output_tokens", 0)
-      cost = (input_t / 1000) * input_cost_per_1k + (
-          output_t / 1000
-      ) * output_cost_per_1k
-      if cost <= 0:
-        return 1.0
-      if cost >= max_cost_usd:
-        return 0.0
-      return 1.0 - (cost / max_cost_usd)
+      return udf_kernels.score_cost(
+          s.get("input_tokens", 0),
+          s.get("output_tokens", 0),
+          max_cost_usd,
+          input_cost_per_1k,
+          output_cost_per_1k,
+      )
 
     evaluator = CodeEvaluator(name="cost_evaluator")
     evaluator.add_metric("cost", _score, threshold=0.5)
