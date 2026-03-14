@@ -411,8 +411,10 @@ class TestProcessCalls:
         ],
     )
     assert len(replies) == 2
-    r0 = json.loads(replies[0])
-    r1 = json.loads(replies[1])
+    r0 = replies[0]
+    r1 = replies[1]
+    assert isinstance(r0, dict)
+    assert isinstance(r1, dict)
     assert r0["trace_id"] == "t1"
     assert r0["_version"] == "1.0"
     assert r1["total_sessions"] == 5
@@ -436,9 +438,9 @@ class TestProcessCalls:
     )
     assert len(replies) == 3
 
-    r0 = json.loads(replies[0])
-    r1 = json.loads(replies[1])
-    r2 = json.loads(replies[2])
+    r0 = replies[0]
+    r1 = replies[1]
+    r2 = replies[2]
 
     assert r0["trace_id"] == "t1"
     assert "_error" in r1
@@ -455,8 +457,7 @@ class TestProcessCalls:
         client,
         [["analyze", {"session_id": "s1"}]],
     )
-    r0 = json.loads(replies[0])
-    assert r0["trace_id"] == "t1"
+    assert replies[0]["trace_id"] == "t1"
 
   def test_all_operations_json_safe(self, rf):
     """Every reply from every operation must be JSON-safe."""
@@ -476,7 +477,8 @@ class TestProcessCalls:
         ],
     )
     assert len(replies) == 4
-    for reply_str in replies:
-      parsed = json.loads(reply_str)
-      json.dumps(parsed)
-      assert parsed["_version"] == "1.0"
+    for reply in replies:
+      assert isinstance(reply, dict)
+      # Must survive json round-trip (no datetime, no non-JSON types)
+      json.dumps(reply)
+      assert reply["_version"] == "1.0"

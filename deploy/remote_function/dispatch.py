@@ -69,7 +69,7 @@ def build_client_from_context(
 def process_calls(
     client: Client,
     calls: list[list[Any]],
-) -> list[str]:
+) -> list[dict[str, Any]]:
   """Process a batch of Remote Function calls.
 
   Args:
@@ -77,9 +77,12 @@ def process_calls(
       calls: List of [operation, params_json] pairs.
 
   Returns:
-      List of JSON strings, one per call (partial failure safe).
+      List of JSON-safe dicts, one per call (partial failure safe).
+      The caller (main.py) serializes the whole ``{"replies": [...]}``
+      response once via ``jsonify``, so replies must be dicts — not
+      pre-serialized JSON strings — to avoid double encoding.
   """
-  replies = []
+  replies: list[dict[str, Any]] = []
   for call in calls:
     try:
       operation, params_json = call[0], call[1]
@@ -90,18 +93,16 @@ def process_calls(
       )
       result = dispatch(client, operation, params)
       result["_version"] = "1.0"
-      replies.append(json.dumps(result))
+      replies.append(result)
     except Exception as e:
       replies.append(
-          json.dumps(
-              {
-                  "_error": {
-                      "code": type(e).__name__,
-                      "message": str(e),
-                  },
-                  "_version": "1.0",
-              }
-          )
+          {
+              "_error": {
+                  "code": type(e).__name__,
+                  "message": str(e),
+              },
+              "_version": "1.0",
+          }
       )
   return replies
 
