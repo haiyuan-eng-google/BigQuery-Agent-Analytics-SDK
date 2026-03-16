@@ -27,14 +27,19 @@
 -- 1. Score all sessions on latency, error rate, and turn count         --
 -- ------------------------------------------------------------------ --
 
+-- Note: COALESCE guards are required because Python UDFs receive NULL
+-- as None, which fails numeric comparisons.  The SDK evaluator path
+-- catches these via exception handling (evaluators.py:211), but the
+-- UDF kernels are pure functions with no such fallback.
+
 WITH session_summary AS (
   SELECT
     session_id,
-    AVG(
+    COALESCE(AVG(
       CAST(
         JSON_VALUE(latency_ms, '$.total_ms') AS FLOAT64
       )
-    ) AS avg_latency_ms,
+    ), 0.0) AS avg_latency_ms,
     COUNTIF(event_type = 'TOOL_STARTING') AS tool_calls,
     COUNTIF(event_type = 'TOOL_ERROR') AS tool_errors,
     COUNTIF(event_type = 'USER_MESSAGE_RECEIVED') AS turn_count
@@ -73,11 +78,11 @@ LIMIT 100;
 WITH session_summary AS (
   SELECT
     session_id,
-    AVG(
+    COALESCE(AVG(
       CAST(
         JSON_VALUE(latency_ms, '$.total_ms') AS FLOAT64
       )
-    ) AS avg_latency_ms,
+    ), 0.0) AS avg_latency_ms,
     COUNTIF(event_type = 'TOOL_STARTING') AS tool_calls,
     COUNTIF(event_type = 'TOOL_ERROR') AS tool_errors,
     COUNTIF(event_type = 'USER_MESSAGE_RECEIVED') AS turn_count

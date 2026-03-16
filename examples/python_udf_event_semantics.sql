@@ -45,12 +45,15 @@ ORDER BY
 -- ------------------------------------------------------------------ --
 -- 2. Extract agent responses from LLM events                          --
 -- ------------------------------------------------------------------ --
+-- The content column is JSON-typed in the SDK schema.  The UDF expects
+-- a plain STRING, so use CAST(content AS STRING) — not TO_JSON_STRING,
+-- which would double-encode the payload and break key extraction.
 
 SELECT
   session_id,
   timestamp,
   `PROJECT.UDF_DATASET.bqaa_extract_response_text`(
-    TO_JSON_STRING(content)
+    CAST(content AS STRING)
   ) AS response_text
 FROM
   `PROJECT.DATASET.agent_events`
