@@ -20,6 +20,11 @@ definitions for "final response", "error event", "tool outcome",
 etc.  Import helpers from this module instead of re-implementing
 event-type checks in each module.
 
+The core predicate logic lives in :mod:`udf_kernels` (the single
+source of truth shared with BigQuery Python UDFs).  This module
+re-exports those functions and adds SDK-specific constants and
+dict-based convenience wrappers.
+
 Example usage::
 
     from bigquery_agent_analytics.event_semantics import (
@@ -37,32 +42,24 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-# ------------------------------------------------------------------ #
-# Error Detection                                                      #
-# ------------------------------------------------------------------ #
+from bigquery_agent_analytics.udf_kernels import extract_response_text_from_dict
+from bigquery_agent_analytics.udf_kernels import is_error_event
+from bigquery_agent_analytics.udf_kernels import tool_outcome
 
-
-def is_error_event(
-    event_type: str,
-    error_message: Optional[str] = None,
-    status: str = "OK",
-) -> bool:
-  """Returns True when the event represents an error.
-
-  Uses the canonical predicate aligned with the ADK plugin:
-  the event type ends with ``_ERROR``, the ``error_message``
-  column is populated, or the ``status`` column is ``'ERROR'``.
-
-  Args:
-      event_type: The event_type column value.
-      error_message: The error_message column value.
-      status: The status column value.
-  """
-  return (
-      event_type.endswith("_ERROR")
-      or error_message is not None
-      or status == "ERROR"
-  )
+# Re-export kernel functions so existing callers keep working.
+__all__ = [
+    "is_error_event",
+    "tool_outcome",
+    "extract_response_text",
+    "is_tool_event",
+    "is_hitl_event",
+    "is_hitl_completed",
+    "ERROR_SQL_PREDICATE",
+    "NO_ERROR_SQL_PREDICATE",
+    "RESPONSE_EVENT_TYPES",
+    "EVENT_FAMILIES",
+    "ALL_KNOWN_EVENT_TYPES",
+]
 
 
 # SQL fragment for use in BigQuery WHERE clauses.
@@ -88,8 +85,8 @@ NO_ERROR_SQL_PREDICATE = (
 def extract_response_text(content: dict[str, Any]) -> Optional[str]:
   """Extracts user-visible response text from a content dict.
 
-  Checks keys in priority order: ``response``, ``text_summary``,
-  ``text``, ``raw``.
+  Delegates to :func:`udf_kernels.extract_response_text_from_dict`
+  (the single source of truth for key-priority logic).
 
   Args:
       content: The parsed ``content`` JSON column.
@@ -97,15 +94,7 @@ def extract_response_text(content: dict[str, Any]) -> Optional[str]:
   Returns:
       The response text or ``None``.
   """
-  if not isinstance(content, dict):
-    return str(content) if content else None
-  return (
-      content.get("response")
-      or content.get("text_summary")
-      or content.get("text")
-      or content.get("raw")
-      or None
-  )
+  return extract_response_text_from_dict(content)
 
 
 # Event types that carry the final agent response, in priority order.
@@ -126,21 +115,7 @@ def is_tool_event(event_type: str) -> bool:
   )
 
 
-def tool_outcome(event_type: str, status: str = "OK") -> str:
-  """Returns a canonical tool outcome string.
-
-  Args:
-      event_type: The event type.
-      status: The status column.
-
-  Returns:
-      One of ``"success"``, ``"error"``, or ``"in_progress"``.
-  """
-  if event_type == "TOOL_ERROR" or status == "ERROR":
-    return "error"
-  if event_type == "TOOL_COMPLETED":
-    return "success"
-  return "in_progress"
+# tool_outcome is imported from udf_kernels above.
 
 
 # ------------------------------------------------------------------ #

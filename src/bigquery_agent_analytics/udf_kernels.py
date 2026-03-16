@@ -35,7 +35,7 @@ See ``docs/python_udf_support_design.md`` for the design rationale.
 from __future__ import annotations
 
 import json
-from typing import Optional
+from typing import Any, Optional
 
 # ------------------------------------------------------------------ #
 # Event Semantics Kernels                                              #
@@ -81,13 +81,41 @@ def tool_outcome(event_type: str, status: str = "OK") -> str:
   return "in_progress"
 
 
+def extract_response_text_from_dict(
+    content: Any,
+) -> Optional[str]:
+  """Extracts user-visible response text from a parsed content dict.
+
+  This is the shared core used by both the Python SDK
+  (``event_semantics.extract_response_text``) and the string-wrapper
+  UDF kernel (``extract_response_text``).
+
+  Checks keys in priority order: ``response``, ``text_summary``,
+  ``text``, ``raw``.
+
+  Args:
+      content: The parsed ``content`` JSON column (dict expected).
+
+  Returns:
+      The response text or ``None``.
+  """
+  if not isinstance(content, dict):
+    return str(content) if content else None
+  return (
+      content.get("response")
+      or content.get("text_summary")
+      or content.get("text")
+      or content.get("raw")
+      or None
+  )
+
+
 def extract_response_text(content_json: Optional[str]) -> Optional[str]:
   """Extracts user-visible response text from a JSON content string.
 
-  This is a parse-wrapper around the dict-based extraction logic:
-  it accepts a JSON ``STRING`` (as required by Python UDFs which do
-  not support the ``JSON`` type), parses it, and checks keys in
-  priority order: ``response``, ``text_summary``, ``text``, ``raw``.
+  This is a parse-wrapper for BigQuery Python UDFs (which do not
+  support the ``JSON`` type): it accepts a JSON ``STRING``, parses
+  it, then delegates to :func:`extract_response_text_from_dict`.
 
   Args:
       content_json: The ``content`` column as a JSON-formatted string.
@@ -101,15 +129,7 @@ def extract_response_text(content_json: Optional[str]) -> Optional[str]:
     content = json.loads(content_json)
   except (json.JSONDecodeError, TypeError):
     return str(content_json) if content_json else None
-  if not isinstance(content, dict):
-    return str(content) if content else None
-  return (
-      content.get("response")
-      or content.get("text_summary")
-      or content.get("text")
-      or content.get("raw")
-      or None
-  )
+  return extract_response_text_from_dict(content)
 
 
 # ------------------------------------------------------------------ #
