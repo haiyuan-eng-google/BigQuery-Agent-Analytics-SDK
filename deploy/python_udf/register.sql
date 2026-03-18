@@ -239,3 +239,110 @@ def bqaa_score_cost(input_tokens, output_tokens, max_cost_usd,
         return 0.0
     return 1.0 - (cost / max_cost_usd)
 """;
+
+
+-- ------------------------------------------------------------------ --
+-- Tier 3: Vectorized UDFs                                              --
+-- ------------------------------------------------------------------ --
+-- Vectorized UDFs process rows in batches using numpy/pandas.
+-- Use these instead of scalar equivalents on large result sets
+-- (>10K rows) for better throughput.
+
+-- Vectorized latency scoring — faster than scalar bqaa_score_latency on large result sets.
+CREATE OR REPLACE FUNCTION `PROJECT.UDF_DATASET.bqaa_score_latency_batch`(
+  avg_latency_ms FLOAT64, threshold_ms FLOAT64
+)
+RETURNS FLOAT64
+LANGUAGE python
+OPTIONS (
+  entry_point = 'bqaa_score_latency_batch',
+  runtime_version = 'python-3.11',
+  vectorized = true,
+  description = """Vectorized latency scoring — faster than scalar bqaa_score_latency on large result sets."""
+)
+AS r"""
+import numpy as np
+
+def bqaa_score_latency_batch(avg_latency_ms, threshold_ms):
+    score = 1.0 - (avg_latency_ms / threshold_ms)
+    score = np.where(avg_latency_ms <= 0, 1.0, score)
+    score = np.where(avg_latency_ms >= threshold_ms, 0.0, score)
+    return score
+""";
+
+-- Vectorized error-rate scoring — faster than scalar bqaa_score_error_rate on large result sets.
+CREATE OR REPLACE FUNCTION `PROJECT.UDF_DATASET.bqaa_score_error_rate_batch`(
+  tool_calls INT64, tool_errors INT64, max_error_rate FLOAT64
+)
+RETURNS FLOAT64
+LANGUAGE python
+OPTIONS (
+  entry_point = 'bqaa_score_error_rate_batch',
+  runtime_version = 'python-3.11',
+  vectorized = true,
+  description = """Vectorized error-rate scoring — faster than scalar bqaa_score_error_rate on large result sets."""
+)
+AS r"""
+import numpy as np
+
+def bqaa_score_error_rate_batch(tool_calls, tool_errors, max_error_rate):
+    safe_calls = np.where(tool_calls > 0, tool_calls, 1)
+    rate = tool_errors / safe_calls
+    score = 1.0 - (rate / max_error_rate)
+    score = np.where(tool_calls <= 0, 1.0, score)
+    score = np.where(rate >= max_error_rate, 0.0, score)
+    return score
+""";
+
+-- Vectorized cost scoring — faster than scalar bqaa_score_cost on large result sets.
+CREATE OR REPLACE FUNCTION `PROJECT.UDF_DATASET.bqaa_score_cost_batch`(
+  input_tokens INT64, output_tokens INT64,
+  max_cost_usd FLOAT64,
+  input_cost_per_1k FLOAT64, output_cost_per_1k FLOAT64
+)
+RETURNS FLOAT64
+LANGUAGE python
+OPTIONS (
+  entry_point = 'bqaa_score_cost_batch',
+  runtime_version = 'python-3.11',
+  vectorized = true,
+  description = """Vectorized cost scoring — faster than scalar bqaa_score_cost on large result sets."""
+)
+AS r"""
+import numpy as np
+
+def bqaa_score_cost_batch(input_tokens, output_tokens, max_cost_usd,
+                          input_cost_per_1k, output_cost_per_1k):
+    cost = ((input_tokens / 1000) * input_cost_per_1k
+            + (output_tokens / 1000) * output_cost_per_1k)
+    score = 1.0 - (cost / max_cost_usd)
+    score = np.where(cost <= 0, 1.0, score)
+    score = np.where(cost >= max_cost_usd, 0.0, score)
+    return score
+""";
+
+-- Vectorized event-type normalizer — maps event types to high-level categories (llm, tool, user, agent).
+CREATE OR REPLACE FUNCTION `PROJECT.UDF_DATASET.bqaa_normalize_event_label`(
+  event_type STRING
+)
+RETURNS STRING
+LANGUAGE python
+OPTIONS (
+  entry_point = 'bqaa_normalize_event_label',
+  runtime_version = 'python-3.11',
+  vectorized = true,
+  description = """Vectorized event-type normalizer — maps event types to high-level categories (llm, tool, user, agent)."""
+)
+AS r"""
+def bqaa_normalize_event_label(event_type):
+    mapping = {
+        "LLM_REQUEST": "llm",
+        "LLM_RESPONSE": "llm",
+        "TOOL_STARTING": "tool",
+        "TOOL_COMPLETED": "tool",
+        "TOOL_ERROR": "tool_error",
+        "USER_MESSAGE_RECEIVED": "user",
+        "AGENT_COMPLETED": "agent",
+    }
+    return event_type.map(mapping).fillna("other")
+""";

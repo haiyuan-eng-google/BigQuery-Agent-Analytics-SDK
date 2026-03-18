@@ -441,3 +441,30 @@ class TestParityEventSemantics:
       assert extract_response_text(json.dumps(d)) == orig(
           d
       ), f"Mismatch for {d}"
+
+
+# ------------------------------------------------------------------ #
+# normalize_event_label                                                #
+# ------------------------------------------------------------------ #
+
+
+class TestNormalizeEventLabel:
+
+  @pytest.mark.parametrize(
+      "event_type,expected",
+      [
+          ("LLM_REQUEST", "llm"),
+          ("LLM_RESPONSE", "llm"),
+          ("TOOL_STARTING", "tool"),
+          ("TOOL_COMPLETED", "tool"),
+          ("TOOL_ERROR", "tool_error"),
+          ("USER_MESSAGE_RECEIVED", "user"),
+          ("AGENT_COMPLETED", "agent"),
+          ("UNKNOWN", "other"),
+          ("", "other"),
+      ],
+  )
+  def test_label_mapping(self, event_type, expected):
+    from bigquery_agent_analytics.udf_kernels import normalize_event_label
+
+    assert normalize_event_label(event_type) == expected

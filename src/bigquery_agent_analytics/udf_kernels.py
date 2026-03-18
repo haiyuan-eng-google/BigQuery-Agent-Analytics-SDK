@@ -262,3 +262,33 @@ def score_cost(
   if cost >= max_cost_usd:
     return 0.0
   return 1.0 - (cost / max_cost_usd)
+
+
+# ------------------------------------------------------------------ #
+# Event Label Normalization                                            #
+# ------------------------------------------------------------------ #
+
+_EVENT_LABEL_MAP: dict[str, str] = {
+    "LLM_REQUEST": "llm",
+    "LLM_RESPONSE": "llm",
+    "TOOL_STARTING": "tool",
+    "TOOL_COMPLETED": "tool",
+    "TOOL_ERROR": "tool_error",
+    "USER_MESSAGE_RECEIVED": "user",
+    "AGENT_COMPLETED": "agent",
+}
+
+
+def normalize_event_label(event_type: str) -> str:
+  """Normalize an event_type string to a high-level category.
+
+  Useful for grouping events in aggregate queries.
+
+  Args:
+      event_type: The event_type column value.
+
+  Returns:
+      One of ``"llm"``, ``"tool"``, ``"tool_error"``, ``"user"``,
+      ``"agent"``, or ``"other"``.
+  """
+  return _EVENT_LABEL_MAP.get(event_type, "other")

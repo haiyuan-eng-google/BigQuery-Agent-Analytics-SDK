@@ -48,6 +48,7 @@ class _UdfSpec:
   return_type: str
   body: str
   description: str
+  vectorized: bool = False
 
 
 # ------------------------------------------------------------------ #
@@ -239,6 +240,113 @@ _SCORE_COST = _UdfSpec(
 )
 
 # ------------------------------------------------------------------ #
+# Tier 3: Vectorized UDFs                                              #
+# ------------------------------------------------------------------ #
+
+_SCORE_LATENCY_BATCH = _UdfSpec(
+    name="bqaa_score_latency_batch",
+    params="avg_latency_ms FLOAT64, threshold_ms FLOAT64",
+    return_type="FLOAT64",
+    description=(
+        "Vectorized latency scoring — faster than scalar "
+        "bqaa_score_latency on large result sets."
+    ),
+    vectorized=True,
+    body=textwrap.dedent(
+        """\
+        import numpy as np
+
+        def bqaa_score_latency_batch(avg_latency_ms, threshold_ms):
+            score = 1.0 - (avg_latency_ms / threshold_ms)
+            score = np.where(avg_latency_ms <= 0, 1.0, score)
+            score = np.where(avg_latency_ms >= threshold_ms, 0.0, score)
+            return score
+    """
+    ),
+)
+
+_SCORE_ERROR_RATE_BATCH = _UdfSpec(
+    name="bqaa_score_error_rate_batch",
+    params=("tool_calls INT64, tool_errors INT64," " max_error_rate FLOAT64"),
+    return_type="FLOAT64",
+    description=(
+        "Vectorized error-rate scoring — faster than scalar "
+        "bqaa_score_error_rate on large result sets."
+    ),
+    vectorized=True,
+    body=textwrap.dedent(
+        """\
+        import numpy as np
+
+        def bqaa_score_error_rate_batch(tool_calls, tool_errors,
+                                        max_error_rate):
+            safe_calls = np.where(tool_calls > 0, tool_calls, 1)
+            rate = tool_errors / safe_calls
+            score = 1.0 - (rate / max_error_rate)
+            score = np.where(tool_calls <= 0, 1.0, score)
+            score = np.where(rate >= max_error_rate, 0.0, score)
+            return score
+    """
+    ),
+)
+
+_SCORE_COST_BATCH = _UdfSpec(
+    name="bqaa_score_cost_batch",
+    params=(
+        "input_tokens INT64, output_tokens INT64,"
+        " max_cost_usd FLOAT64,"
+        " input_cost_per_1k FLOAT64, output_cost_per_1k FLOAT64"
+    ),
+    return_type="FLOAT64",
+    description=(
+        "Vectorized cost scoring — faster than scalar "
+        "bqaa_score_cost on large result sets."
+    ),
+    vectorized=True,
+    body=textwrap.dedent(
+        """\
+        import numpy as np
+
+        def bqaa_score_cost_batch(input_tokens, output_tokens,
+                                  max_cost_usd, input_cost_per_1k,
+                                  output_cost_per_1k):
+            cost = ((input_tokens / 1000) * input_cost_per_1k
+                    + (output_tokens / 1000) * output_cost_per_1k)
+            score = 1.0 - (cost / max_cost_usd)
+            score = np.where(cost <= 0, 1.0, score)
+            score = np.where(cost >= max_cost_usd, 0.0, score)
+            return score
+    """
+    ),
+)
+
+_NORMALIZE_EVENT_LABEL = _UdfSpec(
+    name="bqaa_normalize_event_label",
+    params="event_type STRING",
+    return_type="STRING",
+    description=(
+        "Vectorized event-type normalizer — maps event types "
+        "to high-level categories (llm, tool, user, agent)."
+    ),
+    vectorized=True,
+    body=textwrap.dedent(
+        """\
+        def bqaa_normalize_event_label(event_type):
+            mapping = {
+                "LLM_REQUEST": "llm",
+                "LLM_RESPONSE": "llm",
+                "TOOL_STARTING": "tool",
+                "TOOL_COMPLETED": "tool",
+                "TOOL_ERROR": "tool_error",
+                "USER_MESSAGE_RECEIVED": "user",
+                "AGENT_COMPLETED": "agent",
+            }
+            return event_type.map(mapping).fillna("other")
+    """
+    ),
+)
+
+# ------------------------------------------------------------------ #
 # Registry                                                             #
 # ------------------------------------------------------------------ #
 
@@ -254,6 +362,11 @@ ALL_UDFS: list[_UdfSpec] = [
     _SCORE_TOKEN_EFFICIENCY,
     _SCORE_TTFT,
     _SCORE_COST,
+    # Tier 3: vectorized
+    _SCORE_LATENCY_BATCH,
+    _SCORE_ERROR_RATE_BATCH,
+    _SCORE_COST_BATCH,
+    _NORMALIZE_EVENT_LABEL,
 ]
 
 UDF_NAMES: list[str] = [u.name for u in ALL_UDFS]
@@ -266,6 +379,7 @@ def _render_udf(
 ) -> str:
   """Render CREATE OR REPLACE FUNCTION DDL for a single UDF."""
   body = spec.body.rstrip()
+  vectorized_line = "  vectorized = true,\n" if spec.vectorized else ""
   return (
       f"-- {spec.description}\n"
       f"CREATE OR REPLACE FUNCTION"
@@ -277,6 +391,7 @@ def _render_udf(
       f"OPTIONS (\n"
       f"  entry_point = '{spec.name}',\n"
       f"  runtime_version = 'python-3.11',\n"
+      f"{vectorized_line}"
       f'  description = """{spec.description}"""\n'
       f")\n"
       f'AS r"""\n'
@@ -341,6 +456,7 @@ def list_udfs() -> list[dict[str, str]]:
           "params": spec.params,
           "return_type": spec.return_type,
           "description": spec.description,
+          "vectorized": spec.vectorized,
       }
       for spec in ALL_UDFS
   ]

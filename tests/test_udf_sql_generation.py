@@ -14,6 +14,8 @@
 
 """Tests for Python UDF SQL generation."""
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from bigquery_agent_analytics.udf_sql_templates import ALL_UDFS
@@ -25,6 +27,8 @@ from bigquery_agent_analytics.udf_sql_templates import UDF_NAMES
 PROJECT = "test-project"
 DATASET = "analytics"
 
+TOTAL_UDFS = 13  # 3 Tier 1 + 6 Tier 2 + 4 Tier 3
+
 
 # ------------------------------------------------------------------ #
 # Registry                                                             #
@@ -34,10 +38,10 @@ DATASET = "analytics"
 class TestRegistry:
 
   def test_all_udfs_count(self):
-    assert len(ALL_UDFS) == 9
+    assert len(ALL_UDFS) == TOTAL_UDFS
 
   def test_udf_names_count(self):
-    assert len(UDF_NAMES) == 9
+    assert len(UDF_NAMES) == TOTAL_UDFS
 
   def test_names_unique(self):
     assert len(set(UDF_NAMES)) == len(UDF_NAMES)
@@ -66,6 +70,29 @@ class TestRegistry:
     ]
     for name in tier2:
       assert name in UDF_NAMES, f"Missing Tier 2 UDF: {name}"
+
+  def test_tier3_vectorized(self):
+    tier3 = [
+        "bqaa_score_latency_batch",
+        "bqaa_score_error_rate_batch",
+        "bqaa_score_cost_batch",
+        "bqaa_normalize_event_label",
+    ]
+    for name in tier3:
+      assert name in UDF_NAMES, f"Missing Tier 3 UDF: {name}"
+
+  def test_vectorized_flags(self):
+    vectorized_names = {
+        "bqaa_score_latency_batch",
+        "bqaa_score_error_rate_batch",
+        "bqaa_score_cost_batch",
+        "bqaa_normalize_event_label",
+    }
+    for spec in ALL_UDFS:
+      if spec.name in vectorized_names:
+        assert spec.vectorized, f"{spec.name} should be vectorized"
+      else:
+        assert not spec.vectorized, f"{spec.name} should not be vectorized"
 
 
 # ------------------------------------------------------------------ #
@@ -133,6 +160,56 @@ class TestGenerateUdf:
 
 
 # ------------------------------------------------------------------ #
+# Vectorized DDL structure                                             #
+# ------------------------------------------------------------------ #
+
+VECTORIZED_NAMES = [
+    "bqaa_score_latency_batch",
+    "bqaa_score_error_rate_batch",
+    "bqaa_score_cost_batch",
+    "bqaa_normalize_event_label",
+]
+SCALAR_NAMES = [n for n in UDF_NAMES if n not in VECTORIZED_NAMES]
+
+
+class TestVectorizedDdl:
+
+  @pytest.mark.parametrize("name", VECTORIZED_NAMES)
+  def test_has_vectorized_option(self, name):
+    sql = generate_udf(name, PROJECT, DATASET)
+    assert "vectorized = true" in sql
+
+  @pytest.mark.parametrize("name", SCALAR_NAMES)
+  def test_scalar_has_no_vectorized_option(self, name):
+    sql = generate_udf(name, PROJECT, DATASET)
+    assert "vectorized" not in sql
+
+  def test_latency_batch_return_type(self):
+    sql = generate_udf("bqaa_score_latency_batch", PROJECT, DATASET)
+    assert "RETURNS FLOAT64" in sql
+
+  def test_error_rate_batch_return_type(self):
+    sql = generate_udf("bqaa_score_error_rate_batch", PROJECT, DATASET)
+    assert "RETURNS FLOAT64" in sql
+
+  def test_cost_batch_return_type(self):
+    sql = generate_udf("bqaa_score_cost_batch", PROJECT, DATASET)
+    assert "RETURNS FLOAT64" in sql
+
+  def test_normalize_label_return_type(self):
+    sql = generate_udf("bqaa_normalize_event_label", PROJECT, DATASET)
+    assert "RETURNS STRING" in sql
+
+  def test_latency_batch_uses_numpy(self):
+    sql = generate_udf("bqaa_score_latency_batch", PROJECT, DATASET)
+    assert "import numpy" in sql
+
+  def test_normalize_label_uses_map(self):
+    sql = generate_udf("bqaa_normalize_event_label", PROJECT, DATASET)
+    assert ".map(" in sql
+
+
+# ------------------------------------------------------------------ #
 # generate_all_udfs                                                    #
 # ------------------------------------------------------------------ #
 
@@ -144,9 +221,9 @@ class TestGenerateAllUdfs:
     for name in UDF_NAMES:
       assert f".{name}`" in sql, f"Missing UDF: {name}"
 
-  def test_nine_create_statements(self):
+  def test_total_create_statements(self):
     sql = generate_all_udfs(PROJECT, DATASET)
-    assert sql.count("CREATE OR REPLACE FUNCTION") == 9
+    assert sql.count("CREATE OR REPLACE FUNCTION") == TOTAL_UDFS
 
   def test_custom_separator(self):
     sql = generate_all_udfs(PROJECT, DATASET, separator="\n---\n")
@@ -168,7 +245,7 @@ class TestListUdfs:
   def test_returns_list(self):
     result = list_udfs()
     assert isinstance(result, list)
-    assert len(result) == 9
+    assert len(result) == TOTAL_UDFS
 
   def test_dict_keys(self):
     for entry in list_udfs():
@@ -176,10 +253,15 @@ class TestListUdfs:
       assert "params" in entry
       assert "return_type" in entry
       assert "description" in entry
+      assert "vectorized" in entry
 
   def test_names_match_registry(self):
     names = [e["name"] for e in list_udfs()]
     assert names == UDF_NAMES
+
+  def test_vectorized_entries(self):
+    vectorized = [e for e in list_udfs() if e["vectorized"]]
+    assert len(vectorized) == 4
 
 
 # ------------------------------------------------------------------ #
@@ -294,3 +376,90 @@ class TestBodyParity:
     ]
     for args in cases:
       assert fn(*args) == pytest.approx(score_cost(*args))
+
+
+# ------------------------------------------------------------------ #
+# Vectorized body parity: vectorized bodies must match scalar kernels  #
+# ------------------------------------------------------------------ #
+
+
+class TestVectorizedBodyParity:
+  """Verify that the vectorized UDF bodies produce element-wise
+  identical results to the scalar udf_kernels functions."""
+
+  def _exec_vectorized_udf(self, name):
+    """Extract and exec the vectorized UDF body, return the callable."""
+    import textwrap
+
+    sql = generate_udf(name, PROJECT, DATASET)
+    start = sql.index('AS r"""') + len('AS r"""')
+    end = sql.index('""";')
+    body = textwrap.dedent(sql[start:end])
+    ns = {"np": np, "pd": pd}
+    exec(body, ns)  # noqa: S102
+    return ns[name]
+
+  def test_score_latency_batch_parity(self):
+    from bigquery_agent_analytics.udf_kernels import score_latency
+
+    fn = self._exec_vectorized_udf("bqaa_score_latency_batch")
+    avgs = pd.Series([0, 2500, 5000, 10000, -1], dtype=float)
+    thresholds = pd.Series([5000.0] * 5)
+    result = fn(avgs, thresholds)
+    for i, (a, t) in enumerate(zip(avgs, thresholds)):
+      assert result[i] == pytest.approx(
+          score_latency(a, t)
+      ), f"Mismatch at index {i}: avg={a}, thresh={t}"
+
+  def test_score_error_rate_batch_parity(self):
+    from bigquery_agent_analytics.udf_kernels import score_error_rate
+
+    fn = self._exec_vectorized_udf("bqaa_score_error_rate_batch")
+    calls = pd.Series([0, 10, 10, 100, 5], dtype=np.int64)
+    errors = pd.Series([0, 0, 1, 5, 5], dtype=np.int64)
+    max_rates = pd.Series([0.1] * 5)
+    result = fn(calls, errors, max_rates)
+    for i in range(len(calls)):
+      assert result[i] == pytest.approx(
+          score_error_rate(calls[i], errors[i], max_rates[i])
+      ), f"Mismatch at index {i}"
+
+  def test_score_cost_batch_parity(self):
+    from bigquery_agent_analytics.udf_kernels import score_cost
+
+    fn = self._exec_vectorized_udf("bqaa_score_cost_batch")
+    inp = pd.Series([0, 10000, 1000], dtype=np.int64)
+    out = pd.Series([0, 10000, 1000], dtype=np.int64)
+    max_cost = pd.Series([1.0, 1.0, 0.01])
+    icost = pd.Series([0.00025, 0.00025, 0.001])
+    ocost = pd.Series([0.00125, 0.00125, 0.002])
+    result = fn(inp, out, max_cost, icost, ocost)
+    for i in range(len(inp)):
+      expected = score_cost(
+          inp[i],
+          out[i],
+          max_cost[i],
+          icost[i],
+          ocost[i],
+      )
+      assert result[i] == pytest.approx(expected), f"Mismatch at index {i}"
+
+  def test_normalize_event_label_parity(self):
+    from bigquery_agent_analytics.udf_kernels import normalize_event_label
+
+    fn = self._exec_vectorized_udf("bqaa_normalize_event_label")
+    events = pd.Series(
+        [
+            "LLM_REQUEST",
+            "LLM_RESPONSE",
+            "TOOL_STARTING",
+            "TOOL_COMPLETED",
+            "TOOL_ERROR",
+            "USER_MESSAGE_RECEIVED",
+            "AGENT_COMPLETED",
+            "UNKNOWN_EVENT",
+        ]
+    )
+    result = fn(events)
+    for i, ev in enumerate(events):
+      assert result[i] == normalize_event_label(ev), f"Mismatch for {ev}"
