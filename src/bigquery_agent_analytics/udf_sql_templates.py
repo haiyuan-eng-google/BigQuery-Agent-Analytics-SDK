@@ -37,7 +37,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import textwrap
-from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -266,8 +265,7 @@ def _render_udf(
     dataset: str,
 ) -> str:
   """Render CREATE OR REPLACE FUNCTION DDL for a single UDF."""
-  # Indent body for the OPTIONS block
-  indented = textwrap.indent(spec.body.rstrip(), "    ")
+  body = spec.body.rstrip()
   return (
       f"-- {spec.description}\n"
       f"CREATE OR REPLACE FUNCTION"
@@ -282,7 +280,7 @@ def _render_udf(
       f'  description = """{spec.description}"""\n'
       f")\n"
       f'AS r"""\n'
-      f"{indented}\n"
+      f"{body}\n"
       f'""";'
   )
 
