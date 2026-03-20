@@ -288,6 +288,24 @@ class TestParseClassifications:
     results = parse_classifications(raw, config)
     assert len(results) == 2
 
+  def test_duplicate_metric_flagged_as_error(self):
+    config = _make_config()
+    raw = json.dumps([
+        {"metric_name": "tone", "category": "positive"},
+        {"metric_name": "tone", "category": "negative"},
+        {"metric_name": "safety", "category": "safe"},
+    ])
+    results = parse_classifications(raw, config)
+    tone = results[0]
+    assert tone.parse_error is True
+    assert tone.passed_validation is False
+    # The duplicate should wipe the category — it's ambiguous.
+    assert tone.category is None
+    # safety should be unaffected.
+    safety = results[1]
+    assert safety.category == "safe"
+    assert safety.passed_validation is True
+
   def test_single_object_not_array(self):
     config = CategoricalEvaluationConfig(
         metrics=[
@@ -473,6 +491,22 @@ class TestCategoricalAIGenerateQuery:
 
   def test_does_not_use_legacy_ml_generate(self):
     assert "ML.GENERATE_TEXT" not in CATEGORICAL_AI_GENERATE_QUERY
+
+  def test_scalar_function_shape(self):
+    """AI.GENERATE is a scalar function — prompt is a positional arg,
+    result is accessed via .classifications on the returned STRUCT."""
+    assert ")).classifications" in CATEGORICAL_AI_GENERATE_QUERY
+
+  def test_generation_config_format(self):
+    """model_params must use GenerateContent API format."""
+    assert "generationConfig" in CATEGORICAL_AI_GENERATE_QUERY
+    assert "maxOutputTokens" in CATEGORICAL_AI_GENERATE_QUERY
+
+  def test_not_table_valued(self):
+    """Must NOT use the table-valued FROM ... AI.GENERATE(...) AS result
+    syntax — that form does not exist in BigQuery."""
+    assert "FROM session_transcripts," not in CATEGORICAL_AI_GENERATE_QUERY
+    assert ") AS result" not in CATEGORICAL_AI_GENERATE_QUERY
 
   def test_format_succeeds(self):
     formatted = CATEGORICAL_AI_GENERATE_QUERY.format(

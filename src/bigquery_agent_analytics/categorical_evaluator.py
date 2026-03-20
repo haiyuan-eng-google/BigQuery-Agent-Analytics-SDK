@@ -381,6 +381,17 @@ def parse_classifications(
     if metric_name not in all_metrics:
       continue
 
+    # Duplicate metric entries are malformed — the prompt asks for
+    # exactly one category per metric.  Flag as a parse error.
+    if metric_name in results_by_metric:
+      results_by_metric[metric_name] = CategoricalMetricResult(
+          metric_name=metric_name,
+          passed_validation=False,
+          parse_error=True,
+          raw_response=raw_json,
+      )
+      continue
+
     raw_category = str(entry.get("category", "")).lower().strip()
     canonical = lookup.get(metric_name, {}).get(raw_category)
 
