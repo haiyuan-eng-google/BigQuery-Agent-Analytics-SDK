@@ -53,6 +53,12 @@ from typing import Any, Optional
 
 from google.cloud import bigquery
 
+from .categorical_evaluator import build_categorical_prompt
+from .categorical_evaluator import build_categorical_report
+from .categorical_evaluator import CATEGORICAL_AI_GENERATE_QUERY
+from .categorical_evaluator import CategoricalEvaluationConfig
+from .categorical_evaluator import CategoricalEvaluationReport
+from .categorical_evaluator import parse_categorical_row
 from .evaluators import _parse_json_from_text
 from .evaluators import AI_GENERATE_JUDGE_BATCH_QUERY
 from .evaluators import CodeEvaluator
@@ -1152,6 +1158,80 @@ class Client:
       scores.append(score)
 
     return scores
+
+  # -------------------------------------------------------------- #
+  # Categorical Evaluation                                            #
+  # -------------------------------------------------------------- #
+
+  def evaluate_categorical(
+      self,
+      config: CategoricalEvaluationConfig,
+      filters: Optional[TraceFilter] = None,
+      dataset: Optional[str] = None,
+  ) -> CategoricalEvaluationReport:
+    """Runs categorical evaluation over traces.
+
+    Classifies agent sessions into user-defined categories using
+    BigQuery's native ``AI.GENERATE``.
+
+    Args:
+        config: Categorical evaluation configuration with metric
+            definitions and allowed categories.
+        filters: Optional trace filters.
+        dataset: Optional table name override.
+
+    Returns:
+        CategoricalEvaluationReport with per-session results and
+        category distributions.
+    """
+    table = dataset or self.table_id
+    filt = filters or TraceFilter()
+    where, params = filt.to_sql_conditions()
+
+    # Endpoint precedence: config overrides client when explicitly set.
+    endpoint = (
+        config.endpoint
+        if config.endpoint != CategoricalEvaluationConfig.model_fields[
+            "endpoint"
+        ].default
+        else self.endpoint
+    )
+
+    prompt = build_categorical_prompt(config)
+
+    query = CATEGORICAL_AI_GENERATE_QUERY.format(
+        project=self.project_id,
+        dataset=self.dataset_id,
+        table=table,
+        where=where,
+        endpoint=endpoint,
+        temperature=config.temperature,
+    )
+
+    query_params = list(params) + [
+        bigquery.ScalarQueryParameter(
+            "categorical_prompt", "STRING", prompt,
+        ),
+    ]
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=query_params,
+    )
+
+    results = list(
+        self.bq_client.query(query, job_config=job_config).result()
+    )
+
+    session_results = []
+    for row in results:
+      r = dict(row)
+      sid = r.get("session_id", "unknown")
+      session_results.append(parse_categorical_row(sid, r, config))
+
+    return build_categorical_report(
+        dataset=f"{self._table_ref} WHERE {where}",
+        session_results=session_results,
+        config=config,
+    )
 
   # -------------------------------------------------------------- #
   # Feedback & Curation                                              #
