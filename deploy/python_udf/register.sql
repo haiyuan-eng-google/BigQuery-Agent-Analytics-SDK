@@ -14,8 +14,8 @@
 
 -- BigQuery Python UDF registration for Agent Analytics SDK.
 --
--- This file registers all Tier 1 (event semantics) and Tier 2 (score
--- kernel) UDFs.  Each UDF inlines its
+-- This file registers Tier 1 (event semantics), Tier 2 (score kernel),
+-- and Tier 4 (STRING envelope) UDFs.  Each UDF inlines its
 -- kernel body so there are no
 -- external dependencies — no pip install, no Cloud Function.
 --
@@ -239,4 +239,132 @@ def bqaa_score_cost(input_tokens, output_tokens, max_cost_usd,
     if cost >= max_cost_usd:
         return 0.0
     return 1.0 - (cost / max_cost_usd)
+""";
+
+
+-- ------------------------------------------------------------------ --
+-- Tier 1b: Event Label Normalization                                   --
+-- ------------------------------------------------------------------ --
+
+-- Normalize event_type to a high-level category (llm, tool, user, agent, other).
+CREATE OR REPLACE FUNCTION `PROJECT.UDF_DATASET.bqaa_normalize_event_label`(
+  event_type STRING
+)
+RETURNS STRING
+LANGUAGE python
+OPTIONS (
+  entry_point = 'bqaa_normalize_event_label',
+  runtime_version = 'python-3.11',
+  description = """Normalize event_type to a high-level category (llm, tool, user, agent, other)."""
+)
+AS r"""
+_EVENT_LABEL_MAP = {
+    "LLM_REQUEST": "llm",
+    "LLM_RESPONSE": "llm",
+    "TOOL_STARTING": "tool",
+    "TOOL_COMPLETED": "tool",
+    "TOOL_ERROR": "tool_error",
+    "USER_MESSAGE_RECEIVED": "user",
+    "AGENT_COMPLETED": "agent",
+}
+
+def bqaa_normalize_event_label(event_type):
+    return _EVENT_LABEL_MAP.get(event_type, "other")
+""";
+
+
+-- ------------------------------------------------------------------ --
+-- Tier 4: STRING Envelope UDFs                                         --
+-- ------------------------------------------------------------------ --
+
+-- Compute all six scores and return a JSON STRING summary.
+CREATE OR REPLACE FUNCTION `PROJECT.UDF_DATASET.bqaa_eval_summary_json`(
+  avg_latency_ms FLOAT64,
+  tool_calls INT64, tool_errors INT64,
+  turn_count INT64, total_tokens INT64,
+  avg_ttft_ms FLOAT64,
+  input_tokens INT64, output_tokens INT64,
+  threshold_ms FLOAT64,
+  max_error_rate FLOAT64,
+  max_turns INT64, max_tokens INT64,
+  ttft_threshold_ms FLOAT64,
+  max_cost_usd FLOAT64,
+  input_cost_per_1k FLOAT64,
+  output_cost_per_1k FLOAT64
+)
+RETURNS STRING
+LANGUAGE python
+OPTIONS (
+  entry_point = 'bqaa_eval_summary_json',
+  runtime_version = 'python-3.11',
+  description = """Compute all six scores and return a JSON STRING summary."""
+)
+AS r"""
+import json
+
+def _score_latency(avg, thresh):
+    if avg <= 0:
+        return 1.0
+    if avg >= thresh:
+        return 0.0
+    return 1.0 - (avg / thresh)
+
+def _score_error_rate(calls, errors, max_rate):
+    if calls <= 0:
+        return 1.0
+    rate = errors / calls
+    if rate >= max_rate:
+        return 0.0
+    return 1.0 - (rate / max_rate)
+
+def _score_turn_count(turns, max_t):
+    if turns <= 0:
+        return 1.0
+    if turns >= max_t:
+        return 0.0
+    return 1.0 - (turns / max_t)
+
+def _score_token_efficiency(tokens, max_t):
+    if tokens <= 0:
+        return 1.0
+    if tokens >= max_t:
+        return 0.0
+    return 1.0 - (tokens / max_t)
+
+def _score_ttft(avg, thresh):
+    if avg <= 0:
+        return 1.0
+    if avg >= thresh:
+        return 0.0
+    return 1.0 - (avg / thresh)
+
+def _score_cost(inp, out, max_c, ic, oc):
+    cost = (inp / 1000) * ic + (out / 1000) * oc
+    if cost <= 0:
+        return 1.0
+    if cost >= max_c:
+        return 0.0
+    return 1.0 - (cost / max_c)
+
+def bqaa_eval_summary_json(
+        avg_latency_ms, tool_calls, tool_errors,
+        turn_count, total_tokens, avg_ttft_ms,
+        input_tokens, output_tokens,
+        threshold_ms, max_error_rate,
+        max_turns, max_tokens, ttft_threshold_ms,
+        max_cost_usd, input_cost_per_1k, output_cost_per_1k):
+    scores = {
+        "latency": _score_latency(avg_latency_ms, threshold_ms),
+        "error_rate": _score_error_rate(
+            tool_calls, tool_errors, max_error_rate),
+        "turn_count": _score_turn_count(turn_count, max_turns),
+        "token_efficiency": _score_token_efficiency(
+            total_tokens, max_tokens),
+        "ttft": _score_ttft(avg_ttft_ms, ttft_threshold_ms),
+        "cost": _score_cost(
+            input_tokens, output_tokens,
+            max_cost_usd, input_cost_per_1k, output_cost_per_1k),
+    }
+    scores["passed"] = all(v >= 0.5 for v in scores.values())
+    return json.dumps(scores)
 """;

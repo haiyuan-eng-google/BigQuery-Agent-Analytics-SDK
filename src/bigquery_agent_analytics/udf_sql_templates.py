@@ -239,6 +239,131 @@ _SCORE_COST = _UdfSpec(
 )
 
 # ------------------------------------------------------------------ #
+# Tier 1b: Event Label Normalization                                   #
+# ------------------------------------------------------------------ #
+
+_NORMALIZE_EVENT_LABEL = _UdfSpec(
+    name="bqaa_normalize_event_label",
+    params="event_type STRING",
+    return_type="STRING",
+    description=(
+        "Normalize event_type to a high-level category "
+        "(llm, tool, user, agent, other)."
+    ),
+    body=textwrap.dedent(
+        """\
+        _EVENT_LABEL_MAP = {
+            "LLM_REQUEST": "llm",
+            "LLM_RESPONSE": "llm",
+            "TOOL_STARTING": "tool",
+            "TOOL_COMPLETED": "tool",
+            "TOOL_ERROR": "tool_error",
+            "USER_MESSAGE_RECEIVED": "user",
+            "AGENT_COMPLETED": "agent",
+        }
+
+        def bqaa_normalize_event_label(event_type):
+            return _EVENT_LABEL_MAP.get(event_type, "other")
+    """
+    ),
+)
+
+# ------------------------------------------------------------------ #
+# Tier 4: STRING Envelope UDFs                                         #
+# ------------------------------------------------------------------ #
+
+_EVAL_SUMMARY_JSON = _UdfSpec(
+    name="bqaa_eval_summary_json",
+    params=(
+        "avg_latency_ms FLOAT64,"
+        " tool_calls INT64, tool_errors INT64,"
+        " turn_count INT64, total_tokens INT64,"
+        " avg_ttft_ms FLOAT64,"
+        " input_tokens INT64, output_tokens INT64,"
+        " threshold_ms FLOAT64,"
+        " max_error_rate FLOAT64,"
+        " max_turns INT64, max_tokens INT64,"
+        " ttft_threshold_ms FLOAT64,"
+        " max_cost_usd FLOAT64,"
+        " input_cost_per_1k FLOAT64,"
+        " output_cost_per_1k FLOAT64"
+    ),
+    return_type="STRING",
+    description=("Compute all six scores and return a JSON STRING summary."),
+    body=textwrap.dedent(
+        """\
+        import json
+
+        def _score_latency(avg, thresh):
+            if avg <= 0:
+                return 1.0
+            if avg >= thresh:
+                return 0.0
+            return 1.0 - (avg / thresh)
+
+        def _score_error_rate(calls, errors, max_rate):
+            if calls <= 0:
+                return 1.0
+            rate = errors / calls
+            if rate >= max_rate:
+                return 0.0
+            return 1.0 - (rate / max_rate)
+
+        def _score_turn_count(turns, max_t):
+            if turns <= 0:
+                return 1.0
+            if turns >= max_t:
+                return 0.0
+            return 1.0 - (turns / max_t)
+
+        def _score_token_efficiency(tokens, max_t):
+            if tokens <= 0:
+                return 1.0
+            if tokens >= max_t:
+                return 0.0
+            return 1.0 - (tokens / max_t)
+
+        def _score_ttft(avg, thresh):
+            if avg <= 0:
+                return 1.0
+            if avg >= thresh:
+                return 0.0
+            return 1.0 - (avg / thresh)
+
+        def _score_cost(inp, out, max_c, ic, oc):
+            cost = (inp / 1000) * ic + (out / 1000) * oc
+            if cost <= 0:
+                return 1.0
+            if cost >= max_c:
+                return 0.0
+            return 1.0 - (cost / max_c)
+
+        def bqaa_eval_summary_json(
+                avg_latency_ms, tool_calls, tool_errors,
+                turn_count, total_tokens, avg_ttft_ms,
+                input_tokens, output_tokens,
+                threshold_ms, max_error_rate,
+                max_turns, max_tokens, ttft_threshold_ms,
+                max_cost_usd, input_cost_per_1k, output_cost_per_1k):
+            scores = {
+                "latency": _score_latency(avg_latency_ms, threshold_ms),
+                "error_rate": _score_error_rate(
+                    tool_calls, tool_errors, max_error_rate),
+                "turn_count": _score_turn_count(turn_count, max_turns),
+                "token_efficiency": _score_token_efficiency(
+                    total_tokens, max_tokens),
+                "ttft": _score_ttft(avg_ttft_ms, ttft_threshold_ms),
+                "cost": _score_cost(
+                    input_tokens, output_tokens,
+                    max_cost_usd, input_cost_per_1k, output_cost_per_1k),
+            }
+            scores["passed"] = all(v >= 0.5 for v in scores.values())
+            return json.dumps(scores)
+    """
+    ),
+)
+
+# ------------------------------------------------------------------ #
 # Registry                                                             #
 # ------------------------------------------------------------------ #
 
@@ -247,6 +372,7 @@ ALL_UDFS: list[_UdfSpec] = [
     _IS_ERROR_EVENT,
     _TOOL_OUTCOME,
     _EXTRACT_RESPONSE_TEXT,
+    _NORMALIZE_EVENT_LABEL,
     # Tier 2: score kernels
     _SCORE_LATENCY,
     _SCORE_ERROR_RATE,
@@ -254,6 +380,8 @@ ALL_UDFS: list[_UdfSpec] = [
     _SCORE_TOKEN_EFFICIENCY,
     _SCORE_TTFT,
     _SCORE_COST,
+    # Tier 4: STRING envelope
+    _EVAL_SUMMARY_JSON,
 ]
 
 UDF_NAMES: list[str] = [u.name for u in ALL_UDFS]

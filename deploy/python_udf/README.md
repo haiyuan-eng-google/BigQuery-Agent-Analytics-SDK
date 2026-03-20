@@ -44,6 +44,7 @@ sql = generate_udf("bqaa_score_latency", "my-project", "analytics")
 | `bqaa_is_error_event` | `event_type, error_message, status` | `BOOL` | Error detection |
 | `bqaa_tool_outcome` | `event_type, status` | `STRING` | Tool outcome classification |
 | `bqaa_extract_response_text` | `content_json` | `STRING` | Response text extraction |
+| `bqaa_normalize_event_label` | `event_type` | `STRING` | Event type normalization |
 
 ### Tier 2: Score Kernels
 
@@ -65,6 +66,21 @@ until BigQuery adds `vectorized` option support for Python UDFs.  The
 option is currently only supported for JavaScript UDFs.  When support
 lands, batch-oriented scoring UDFs using numpy/pandas will be added.
 
+### Tier 4: STRING Envelope UDFs
+
+UDFs that return a JSON `STRING` for richer structured output.
+
+| Function | Params | Returns | Description |
+|----------|--------|---------|-------------|
+| `bqaa_eval_summary_json` | `avg_latency_ms, tool_calls, tool_errors, turn_count, total_tokens, avg_ttft_ms, input_tokens, output_tokens, threshold_ms, max_error_rate, max_turns, max_tokens, ttft_threshold_ms, max_cost_usd, input_cost_per_1k, output_cost_per_1k` | `STRING` | All six scores + pass/fail in one JSON object |
+
+Use `JSON_VALUE()` to extract individual scores from the result:
+
+```sql
+JSON_VALUE(summary, '$.latency')   -- individual score
+JSON_VALUE(summary, '$.passed')    -- overall pass/fail
+```
+
 ## Region Guidance
 
 BigQuery UDFs are region-scoped. If your data lives in multiple
@@ -77,3 +93,5 @@ a shared utility dataset.
   Session scoring with SQL pre-aggregation + UDF score kernels
 - [python_udf_event_semantics.sql](../../examples/python_udf_event_semantics.sql) —
   Event classification and response extraction
+- [python_udf_eval_summary.sql](../../examples/python_udf_eval_summary.sql) —
+  All-in-one session evaluation with JSON STRING envelope

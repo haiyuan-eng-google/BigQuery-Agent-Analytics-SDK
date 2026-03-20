@@ -25,7 +25,7 @@ from bigquery_agent_analytics.udf_sql_templates import UDF_NAMES
 PROJECT = "test-project"
 DATASET = "analytics"
 
-TOTAL_UDFS = 9  # 3 Tier 1 + 6 Tier 2
+TOTAL_UDFS = 11  # 4 Tier 1 + 6 Tier 2 + 1 Tier 4
 
 
 # ------------------------------------------------------------------ #
@@ -53,9 +53,13 @@ class TestRegistry:
         "bqaa_is_error_event",
         "bqaa_tool_outcome",
         "bqaa_extract_response_text",
+        "bqaa_normalize_event_label",
     ]
     for name in tier1:
       assert name in UDF_NAMES, f"Missing Tier 1 UDF: {name}"
+
+  def test_tier4_string_envelope(self):
+    assert "bqaa_eval_summary_json" in UDF_NAMES
 
   def test_tier2_score_kernels(self):
     tier2 = [
@@ -132,6 +136,27 @@ class TestGenerateUdf:
     assert "max_cost_usd FLOAT64" in sql
     assert "input_cost_per_1k FLOAT64" in sql
     assert "output_cost_per_1k FLOAT64" in sql
+
+  def test_normalize_event_label_return_type(self):
+    sql = generate_udf("bqaa_normalize_event_label", PROJECT, DATASET)
+    assert "RETURNS STRING" in sql
+
+  def test_eval_summary_json_return_type(self):
+    sql = generate_udf("bqaa_eval_summary_json", PROJECT, DATASET)
+    assert "RETURNS STRING" in sql
+
+  def test_eval_summary_json_has_threshold_params(self):
+    sql = generate_udf("bqaa_eval_summary_json", PROJECT, DATASET)
+    assert "threshold_ms FLOAT64" in sql
+    assert "max_error_rate FLOAT64" in sql
+    assert "max_turns INT64" in sql
+    assert "max_tokens INT64" in sql
+    assert "ttft_threshold_ms FLOAT64" in sql
+    assert "max_cost_usd FLOAT64" in sql
+
+  def test_eval_summary_json_uses_json(self):
+    sql = generate_udf("bqaa_eval_summary_json", PROJECT, DATASET)
+    assert "import json" in sql
 
 
 # ------------------------------------------------------------------ #
@@ -296,3 +321,128 @@ class TestBodyParity:
     ]
     for args in cases:
       assert fn(*args) == pytest.approx(score_cost(*args))
+
+  def test_normalize_event_label_parity(self):
+    from bigquery_agent_analytics.udf_kernels import normalize_event_label
+
+    fn = self._exec_udf("bqaa_normalize_event_label")
+    for ev in [
+        "LLM_REQUEST",
+        "LLM_RESPONSE",
+        "TOOL_STARTING",
+        "TOOL_COMPLETED",
+        "TOOL_ERROR",
+        "USER_MESSAGE_RECEIVED",
+        "AGENT_COMPLETED",
+        "UNKNOWN",
+    ]:
+      assert fn(ev) == normalize_event_label(ev), f"Mismatch for {ev}"
+
+  def test_eval_summary_json_parity(self):
+    import json
+
+    from bigquery_agent_analytics.udf_kernels import eval_summary_json
+
+    fn = self._exec_udf("bqaa_eval_summary_json")
+    args = (
+        2500.0,  # avg_latency_ms
+        10,  # tool_calls
+        1,  # tool_errors
+        5,  # turn_count
+        25000,  # total_tokens
+        500.0,  # avg_ttft_ms
+        10000,  # input_tokens
+        10000,  # output_tokens
+        5000.0,  # threshold_ms
+        0.1,  # max_error_rate
+        10,  # max_turns
+        50000,  # max_tokens
+        1000.0,  # ttft_threshold_ms
+        2.0,  # max_cost_usd
+        0.00025,  # input_cost_per_1k
+        0.00125,  # output_cost_per_1k
+    )
+    udf_result = json.loads(fn(*args))
+    kernel_result = json.loads(eval_summary_json(*args))
+    for key in [
+        "latency",
+        "error_rate",
+        "turn_count",
+        "token_efficiency",
+        "ttft",
+        "cost",
+    ]:
+      assert udf_result[key] == pytest.approx(
+          kernel_result[key]
+      ), f"Mismatch for {key}"
+    assert udf_result["passed"] == kernel_result["passed"]
+
+  def test_eval_summary_json_all_perfect(self):
+    import json
+
+    fn = self._exec_udf("bqaa_eval_summary_json")
+    result = json.loads(
+        fn(
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            5000.0,
+            0.1,
+            10,
+            50000,
+            1000.0,
+            2.0,
+            0.00025,
+            0.00125,
+        )
+    )
+    for key in [
+        "latency",
+        "error_rate",
+        "turn_count",
+        "token_efficiency",
+        "ttft",
+        "cost",
+    ]:
+      assert result[key] == 1.0
+    assert result["passed"] is True
+
+  def test_eval_summary_json_all_worst(self):
+    import json
+
+    fn = self._exec_udf("bqaa_eval_summary_json")
+    result = json.loads(
+        fn(
+            99999.0,
+            10,
+            10,
+            999,
+            999999,
+            99999.0,
+            999999,
+            999999,
+            5000.0,
+            0.1,
+            10,
+            50000,
+            1000.0,
+            0.01,
+            0.001,
+            0.002,
+        )
+    )
+    for key in [
+        "latency",
+        "error_rate",
+        "turn_count",
+        "token_efficiency",
+        "ttft",
+        "cost",
+    ]:
+      assert result[key] == 0.0
+    assert result["passed"] is False

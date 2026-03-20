@@ -468,3 +468,175 @@ class TestNormalizeEventLabel:
     from bigquery_agent_analytics.udf_kernels import normalize_event_label
 
     assert normalize_event_label(event_type) == expected
+
+
+# ------------------------------------------------------------------ #
+# eval_summary_json                                                    #
+# ------------------------------------------------------------------ #
+
+
+class TestEvalSummaryJson:
+
+  def test_returns_valid_json(self):
+    import json
+
+    from bigquery_agent_analytics.udf_kernels import eval_summary_json
+
+    result = json.loads(
+        eval_summary_json(
+            2500.0,
+            10,
+            1,
+            5,
+            25000,
+            500.0,
+            10000,
+            10000,
+            5000.0,
+            0.1,
+            10,
+            50000,
+            1000.0,
+            2.0,
+        )
+    )
+    assert isinstance(result, dict)
+    expected_keys = {
+        "latency",
+        "error_rate",
+        "turn_count",
+        "token_efficiency",
+        "ttft",
+        "cost",
+        "passed",
+    }
+    assert set(result.keys()) == expected_keys
+
+  def test_scores_match_individual_kernels(self):
+    import json
+
+    from bigquery_agent_analytics.udf_kernels import eval_summary_json
+
+    result = json.loads(
+        eval_summary_json(
+            2500.0,
+            10,
+            1,
+            5,
+            25000,
+            500.0,
+            10000,
+            10000,
+            5000.0,
+            0.1,
+            10,
+            50000,
+            1000.0,
+            2.0,
+        )
+    )
+    assert result["latency"] == pytest.approx(score_latency(2500.0, 5000.0))
+    assert result["error_rate"] == pytest.approx(score_error_rate(10, 1, 0.1))
+    assert result["turn_count"] == pytest.approx(score_turn_count(5, 10))
+    assert result["token_efficiency"] == pytest.approx(
+        score_token_efficiency(25000, 50000)
+    )
+    assert result["ttft"] == pytest.approx(score_ttft(500.0, 1000.0))
+    assert result["cost"] == pytest.approx(score_cost(10000, 10000, 2.0))
+
+  def test_all_perfect_passes(self):
+    import json
+
+    from bigquery_agent_analytics.udf_kernels import eval_summary_json
+
+    result = json.loads(
+        eval_summary_json(
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            5000.0,
+            0.1,
+            10,
+            50000,
+            1000.0,
+            2.0,
+        )
+    )
+    assert result["passed"] is True
+    for key in [
+        "latency",
+        "error_rate",
+        "turn_count",
+        "token_efficiency",
+        "ttft",
+        "cost",
+    ]:
+      assert result[key] == 1.0
+
+  def test_all_worst_fails(self):
+    import json
+
+    from bigquery_agent_analytics.udf_kernels import eval_summary_json
+
+    result = json.loads(
+        eval_summary_json(
+            99999.0,
+            10,
+            10,
+            999,
+            999999,
+            99999.0,
+            999999,
+            999999,
+            5000.0,
+            0.1,
+            10,
+            50000,
+            1000.0,
+            0.01,
+            0.001,
+            0.002,
+        )
+    )
+    assert result["passed"] is False
+    for key in [
+        "latency",
+        "error_rate",
+        "turn_count",
+        "token_efficiency",
+        "ttft",
+        "cost",
+    ]:
+      assert result[key] == 0.0
+
+  def test_partial_fail(self):
+    import json
+
+    from bigquery_agent_analytics.udf_kernels import eval_summary_json
+
+    # latency at threshold → 0.0, everything else perfect
+    result = json.loads(
+        eval_summary_json(
+            5000.0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            5000.0,
+            0.1,
+            10,
+            50000,
+            1000.0,
+            2.0,
+        )
+    )
+    assert result["latency"] == 0.0
+    assert result["passed"] is False

@@ -292,3 +292,73 @@ def normalize_event_label(event_type: str) -> str:
       ``"agent"``, or ``"other"``.
   """
   return _EVENT_LABEL_MAP.get(event_type, "other")
+
+
+# ------------------------------------------------------------------ #
+# STRING Envelope Kernels                                              #
+# ------------------------------------------------------------------ #
+
+
+def eval_summary_json(
+    avg_latency_ms: float,
+    tool_calls: int,
+    tool_errors: int,
+    turn_count: int,
+    total_tokens: int,
+    avg_ttft_ms: float,
+    input_tokens: int,
+    output_tokens: int,
+    threshold_ms: float,
+    max_error_rate: float,
+    max_turns: int,
+    max_tokens: int,
+    ttft_threshold_ms: float,
+    max_cost_usd: float,
+    input_cost_per_1k: float = 0.00025,
+    output_cost_per_1k: float = 0.00125,
+) -> str:
+  """Compute all six scores and return a JSON STRING summary.
+
+  This is a convenience kernel that calls all six score kernels and
+  assembles the results into a single JSON object.  Useful when you
+  want a complete evaluation summary in one column without calling
+  six separate UDFs.
+
+  Args:
+      avg_latency_ms: Measured average latency in milliseconds.
+      tool_calls: Total number of tool calls.
+      tool_errors: Number of tool errors.
+      turn_count: Measured number of conversation turns.
+      total_tokens: Measured total token count.
+      avg_ttft_ms: Measured average TTFT in milliseconds.
+      input_tokens: Number of input tokens.
+      output_tokens: Number of output tokens.
+      threshold_ms: Maximum acceptable latency.
+      max_error_rate: Maximum acceptable error fraction.
+      max_turns: Maximum acceptable turn count.
+      max_tokens: Maximum acceptable token count.
+      ttft_threshold_ms: Maximum acceptable TTFT.
+      max_cost_usd: Maximum acceptable cost in USD.
+      input_cost_per_1k: Cost per 1K input tokens.
+      output_cost_per_1k: Cost per 1K output tokens.
+
+  Returns:
+      JSON string with ``latency``, ``error_rate``, ``turn_count``,
+      ``token_efficiency``, ``ttft``, ``cost``, and ``passed`` keys.
+  """
+  scores = {
+      "latency": score_latency(avg_latency_ms, threshold_ms),
+      "error_rate": score_error_rate(tool_calls, tool_errors, max_error_rate),
+      "turn_count": score_turn_count(turn_count, max_turns),
+      "token_efficiency": score_token_efficiency(total_tokens, max_tokens),
+      "ttft": score_ttft(avg_ttft_ms, ttft_threshold_ms),
+      "cost": score_cost(
+          input_tokens,
+          output_tokens,
+          max_cost_usd,
+          input_cost_per_1k,
+          output_cost_per_1k,
+      ),
+  }
+  scores["passed"] = all(v >= 0.5 for v in scores.values())
+  return json.dumps(scores)
