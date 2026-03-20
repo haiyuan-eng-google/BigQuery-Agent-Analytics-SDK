@@ -39,21 +39,49 @@ WITH session_summary AS (
     COUNTIF(event_type = 'TOOL_STARTING') AS tool_calls,
     COUNTIF(event_type = 'TOOL_ERROR') AS tool_errors,
     COUNTIF(event_type = 'USER_MESSAGE_RECEIVED') AS turn_count,
-    COUNT(*) AS total_tokens,
+    SUM(COALESCE(
+      CAST(JSON_VALUE(
+        attributes, '$.usage_metadata.total_token_count'
+      ) AS INT64),
+      CAST(JSON_VALUE(
+        content, '$.usage.total'
+      ) AS INT64),
+      COALESCE(
+        CAST(JSON_VALUE(
+          attributes, '$.input_tokens'
+        ) AS INT64), 0
+      ) + COALESCE(
+        CAST(JSON_VALUE(
+          attributes, '$.output_tokens'
+        ) AS INT64), 0
+      )
+    )) AS total_tokens,
     COALESCE(AVG(
       CAST(
-        JSON_VALUE(latency_ms, '$.ttft_ms') AS FLOAT64
+        JSON_VALUE(latency_ms, '$.time_to_first_token_ms') AS FLOAT64
       )
     ), 0.0) AS avg_ttft_ms,
     SUM(COALESCE(
       CAST(JSON_VALUE(
         attributes, '$.usage_metadata.prompt_token_count'
-      ) AS INT64), 0
+      ) AS INT64),
+      CAST(JSON_VALUE(
+        content, '$.usage.prompt'
+      ) AS INT64),
+      CAST(JSON_VALUE(
+        attributes, '$.input_tokens'
+      ) AS INT64)
     )) AS input_tokens,
     SUM(COALESCE(
       CAST(JSON_VALUE(
         attributes, '$.usage_metadata.candidates_token_count'
-      ) AS INT64), 0
+      ) AS INT64),
+      CAST(JSON_VALUE(
+        content, '$.usage.completion'
+      ) AS INT64),
+      CAST(JSON_VALUE(
+        attributes, '$.output_tokens'
+      ) AS INT64)
     )) AS output_tokens
   FROM
     `PROJECT.DATASET.agent_events`
@@ -98,21 +126,49 @@ WITH session_summary AS (
     COUNTIF(event_type = 'TOOL_STARTING') AS tool_calls,
     COUNTIF(event_type = 'TOOL_ERROR') AS tool_errors,
     COUNTIF(event_type = 'USER_MESSAGE_RECEIVED') AS turn_count,
-    COUNT(*) AS total_tokens,
+    SUM(COALESCE(
+      CAST(JSON_VALUE(
+        attributes, '$.usage_metadata.total_token_count'
+      ) AS INT64),
+      CAST(JSON_VALUE(
+        content, '$.usage.total'
+      ) AS INT64),
+      COALESCE(
+        CAST(JSON_VALUE(
+          attributes, '$.input_tokens'
+        ) AS INT64), 0
+      ) + COALESCE(
+        CAST(JSON_VALUE(
+          attributes, '$.output_tokens'
+        ) AS INT64), 0
+      )
+    )) AS total_tokens,
     COALESCE(AVG(
       CAST(
-        JSON_VALUE(latency_ms, '$.ttft_ms') AS FLOAT64
+        JSON_VALUE(latency_ms, '$.time_to_first_token_ms') AS FLOAT64
       )
     ), 0.0) AS avg_ttft_ms,
     SUM(COALESCE(
       CAST(JSON_VALUE(
         attributes, '$.usage_metadata.prompt_token_count'
-      ) AS INT64), 0
+      ) AS INT64),
+      CAST(JSON_VALUE(
+        content, '$.usage.prompt'
+      ) AS INT64),
+      CAST(JSON_VALUE(
+        attributes, '$.input_tokens'
+      ) AS INT64)
     )) AS input_tokens,
     SUM(COALESCE(
       CAST(JSON_VALUE(
         attributes, '$.usage_metadata.candidates_token_count'
-      ) AS INT64), 0
+      ) AS INT64),
+      CAST(JSON_VALUE(
+        content, '$.usage.completion'
+      ) AS INT64),
+      CAST(JSON_VALUE(
+        attributes, '$.output_tokens'
+      ) AS INT64)
     )) AS output_tokens
   FROM
     `PROJECT.DATASET.agent_events`
