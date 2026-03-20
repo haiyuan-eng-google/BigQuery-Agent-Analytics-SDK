@@ -317,22 +317,22 @@ WITH session_transcripts AS (
 SELECT
   session_id,
   transcript,
-  result.*
-FROM session_transcripts,
-AI.GENERATE(
-  prompt => CONCAT(
-    @categorical_prompt,
-    '\n\nTranscript:\n', transcript
-  ),
-  endpoint => '{endpoint}',
-  model_params => JSON '{"temperature": 0.0, "max_output_tokens": 1024}',
-  output_schema => 'classifications STRING'
-) AS result
+  (AI.GENERATE(
+    CONCAT(
+      @categorical_prompt,
+      '\n\nTranscript:\n', transcript
+    ),
+    endpoint => '{endpoint}',
+    model_params => JSON '{"generationConfig": {"temperature": 0.0, "maxOutputTokens": 1024}}',
+    output_schema => 'classifications STRING'
+  )).classifications AS classifications
+FROM session_transcripts
 ```
 
-This follows the same pattern as
-`evaluators.py:AI_GENERATE_JUDGE_BATCH_QUERY` and
-`insights.py:_AI_GENERATE_FACET_EXTRACTION_QUERY`.
+`AI.GENERATE` is a scalar function: the first positional argument is the
+prompt, and it returns a STRUCT containing the `output_schema` fields
+plus `full_response` and `status`. The `model_params` JSON must conform
+to the Gemini `GenerateContent` request body format.
 
 ## Real-Time Evaluation and Dashboard End-State
 

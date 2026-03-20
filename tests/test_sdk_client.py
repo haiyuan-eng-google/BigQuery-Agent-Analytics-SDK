@@ -21,6 +21,9 @@ from unittest.mock import patch
 
 import pytest
 
+from bigquery_agent_analytics.categorical_evaluator import CategoricalEvaluationConfig
+from bigquery_agent_analytics.categorical_evaluator import CategoricalMetricCategory
+from bigquery_agent_analytics.categorical_evaluator import CategoricalMetricDefinition
 from bigquery_agent_analytics.client import Client
 from bigquery_agent_analytics.evaluators import CodeEvaluator
 from bigquery_agent_analytics.evaluators import EvaluationReport
@@ -1018,3 +1021,145 @@ class TestFetchSessionMetadata:
     meta = result[0]
     assert meta.hitl_events == 0
     assert meta.state_changes == 0
+
+
+# ------------------------------------------------------------------ #
+# Categorical Evaluation                                               #
+# ------------------------------------------------------------------ #
+
+
+def _make_categorical_config(**overrides):
+  """Builds a minimal CategoricalEvaluationConfig for testing."""
+  defaults = dict(
+      metrics=[
+          CategoricalMetricDefinition(
+              name="tone",
+              definition="Tone.",
+              categories=[
+                  CategoricalMetricCategory(
+                      name="positive", definition="Good."
+                  ),
+                  CategoricalMetricCategory(name="negative", definition="Bad."),
+              ],
+          ),
+      ],
+  )
+  defaults.update(overrides)
+  return CategoricalEvaluationConfig(**defaults)
+
+
+class TestEvaluateCategoricalEndpoint:
+  """Tests for endpoint resolution in evaluate_categorical()."""
+
+  def test_legacy_model_ref_on_client_falls_back_to_default(self):
+    """Client with a legacy BQML endpoint should NOT pass it to
+    AI.GENERATE — it should fall back to the default endpoint."""
+    mock_bq = _mock_bq_client()
+    mock_bq.query.return_value.result.return_value = iter([])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+        endpoint="proj.ds.my_model",
+    )
+    config = _make_categorical_config()
+    report = client.evaluate_categorical(config=config)
+
+    # The SQL sent to BigQuery should contain the default Gemini
+    # endpoint, not the legacy model ref.
+    sql = mock_bq.query.call_args[0][0]
+    assert "gemini-2.5-flash" in sql
+    assert "proj.ds.my_model" not in sql
+
+  def test_config_endpoint_overrides_client(self):
+    """Explicit config.endpoint should take precedence over client."""
+    mock_bq = _mock_bq_client()
+    mock_bq.query.return_value.result.return_value = iter([])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+        endpoint="gemini-2.5-pro",
+    )
+    config = _make_categorical_config(endpoint="gemini-2.0-flash")
+    report = client.evaluate_categorical(config=config)
+
+    sql = mock_bq.query.call_args[0][0]
+    assert "gemini-2.0-flash" in sql
+
+  def test_config_default_uses_client_endpoint(self):
+    """When config.endpoint is the default, client.endpoint should be
+    used (if it is not a legacy ref)."""
+    mock_bq = _mock_bq_client()
+    mock_bq.query.return_value.result.return_value = iter([])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+        endpoint="gemini-2.5-pro",
+    )
+    config = _make_categorical_config()  # default endpoint
+    report = client.evaluate_categorical(config=config)
+
+    sql = mock_bq.query.call_args[0][0]
+    assert "gemini-2.5-pro" in sql
+
+  def test_explicit_default_overrides_legacy_client(self):
+    """Explicitly setting config.endpoint='gemini-2.5-flash' should
+    override even a legacy client endpoint."""
+    mock_bq = _mock_bq_client()
+    mock_bq.query.return_value.result.return_value = iter([])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+        endpoint="proj.ds.my_model",
+    )
+    # Explicitly set — but same as default value.
+    # The precedence logic treats this as "not explicitly set" so
+    # it falls back to the legacy guard, which returns the default.
+    config = _make_categorical_config(endpoint="gemini-2.5-flash")
+    report = client.evaluate_categorical(config=config)
+
+    sql = mock_bq.query.call_args[0][0]
+    assert "gemini-2.5-flash" in sql
+    assert "proj.ds.my_model" not in sql
+
+
+class TestEvaluateCategoricalDataset:
+  """Tests for dataset metadata in evaluate_categorical()."""
+
+  def test_report_reflects_table_override(self):
+    """When dataset= is passed, the report should reference it."""
+    mock_bq = _mock_bq_client()
+    mock_bq.query.return_value.result.return_value = iter([])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    config = _make_categorical_config()
+    report = client.evaluate_categorical(
+        config=config,
+        dataset="custom_events",
+    )
+    assert "custom_events" in report.dataset
+
+  def test_report_uses_default_table(self):
+    """Without dataset= override, report should use default table."""
+    mock_bq = _mock_bq_client()
+    mock_bq.query.return_value.result.return_value = iter([])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    config = _make_categorical_config()
+    report = client.evaluate_categorical(config=config)
+    assert "agent_events" in report.dataset

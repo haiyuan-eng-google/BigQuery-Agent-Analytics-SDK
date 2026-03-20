@@ -313,6 +313,31 @@ except ImportError as e:
       e,
   )
 
+# Categorical Evaluator
+try:
+  from .categorical_evaluator import CategoricalEvaluationConfig
+  from .categorical_evaluator import CategoricalEvaluationReport
+  from .categorical_evaluator import CategoricalMetricCategory
+  from .categorical_evaluator import CategoricalMetricDefinition
+  from .categorical_evaluator import CategoricalMetricResult
+  from .categorical_evaluator import CategoricalSessionResult
+
+  __all__.extend(
+      [
+          "CategoricalEvaluationConfig",
+          "CategoricalEvaluationReport",
+          "CategoricalMetricCategory",
+          "CategoricalMetricDefinition",
+          "CategoricalMetricResult",
+          "CategoricalSessionResult",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import categorical evaluator components: %s.",
+      e,
+  )
+
 # BigFrames Evaluator (optional bigframes dependency)
 try:
   from .bigframes_evaluator import BigFramesEvaluator
