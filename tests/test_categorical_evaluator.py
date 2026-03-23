@@ -14,19 +14,25 @@
 
 """Tests for the categorical evaluator module."""
 
+import asyncio
 import json
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 
 from bigquery_agent_analytics.categorical_evaluator import build_categorical_prompt
 from bigquery_agent_analytics.categorical_evaluator import build_categorical_report
 from bigquery_agent_analytics.categorical_evaluator import CATEGORICAL_AI_GENERATE_QUERY
+from bigquery_agent_analytics.categorical_evaluator import CATEGORICAL_TRANSCRIPT_QUERY
 from bigquery_agent_analytics.categorical_evaluator import CategoricalEvaluationConfig
 from bigquery_agent_analytics.categorical_evaluator import CategoricalEvaluationReport
 from bigquery_agent_analytics.categorical_evaluator import CategoricalMetricCategory
 from bigquery_agent_analytics.categorical_evaluator import CategoricalMetricDefinition
 from bigquery_agent_analytics.categorical_evaluator import CategoricalMetricResult
 from bigquery_agent_analytics.categorical_evaluator import CategoricalSessionResult
+from bigquery_agent_analytics.categorical_evaluator import classify_sessions_via_api
 from bigquery_agent_analytics.categorical_evaluator import parse_categorical_row
 from bigquery_agent_analytics.categorical_evaluator import parse_classifications
 
@@ -530,3 +536,220 @@ class TestCategoricalAIGenerateQuery:
     )
     assert "p.d.t" in formatted
     assert "gemini-2.5-flash" in formatted
+
+
+# ------------------------------------------------------------------ #
+# Transcript Query Tests                                               #
+# ------------------------------------------------------------------ #
+
+
+class TestCategoricalTranscriptQuery:
+  """Tests for the transcript-only SQL template."""
+
+  def test_does_not_contain_ai_generate(self):
+    assert "AI.GENERATE" not in CATEGORICAL_TRANSCRIPT_QUERY
+
+  def test_selects_session_id_and_transcript(self):
+    assert "session_id" in CATEGORICAL_TRANSCRIPT_QUERY
+    assert "transcript" in CATEGORICAL_TRANSCRIPT_QUERY
+
+  def test_uses_same_transcript_building_as_ai_generate(self):
+    """The transcript CTE should match the AI.GENERATE query."""
+    assert "STRING_AGG" in CATEGORICAL_TRANSCRIPT_QUERY
+    assert (
+        "JSON_VALUE(content, '$.text_summary')" in CATEGORICAL_TRANSCRIPT_QUERY
+    )
+
+  def test_format_succeeds(self):
+    formatted = CATEGORICAL_TRANSCRIPT_QUERY.format(
+        project="p",
+        dataset="d",
+        table="t",
+        where="1=1",
+    )
+    assert "p.d.t" in formatted
+
+
+# ------------------------------------------------------------------ #
+# API Fallback Tests                                                   #
+# ------------------------------------------------------------------ #
+
+
+def _run(coro):
+  """Helper to run async tests."""
+  return asyncio.get_event_loop().run_until_complete(coro)
+
+
+def _mock_genai_modules(mock_client):
+  """Sets up sys.modules mocks for google.genai imports."""
+  import sys
+
+  mock_genai = MagicMock()
+  mock_genai.Client.return_value = mock_client
+  mock_types = MagicMock()
+  mock_google = MagicMock()
+  mock_google.genai = mock_genai
+
+  return patch.dict(
+      sys.modules,
+      {
+          "google": mock_google,
+          "google.genai": mock_genai,
+          "google.genai.types": mock_types,
+      },
+  )
+
+
+def _make_genai_client(generate_side_effect):
+  """Builds a mock genai client with the given generate_content behavior."""
+  mock_aio_models = MagicMock()
+  mock_aio_models.generate_content = AsyncMock(
+      side_effect=generate_side_effect
+      if isinstance(generate_side_effect, (list, Exception))
+      else None,
+      return_value=generate_side_effect
+      if not isinstance(generate_side_effect, (list, Exception))
+      else None,
+  )
+  if isinstance(generate_side_effect, list):
+    mock_aio_models.generate_content = AsyncMock(
+        side_effect=generate_side_effect
+    )
+  mock_aio = MagicMock()
+  mock_aio.models = mock_aio_models
+  mock_client = MagicMock()
+  mock_client.aio = mock_aio
+  return mock_client, mock_aio_models
+
+
+class TestClassifySessionsViaApi:
+  """Tests for classify_sessions_via_api."""
+
+  def test_valid_api_response(self):
+    """Successful Gemini API response should be parsed and validated."""
+    config = _make_config()
+    transcripts = {"s1": "USER: Hello\nAGENT: Hi!"}
+
+    raw_response = json.dumps(
+        [
+            {
+                "metric_name": "tone",
+                "category": "positive",
+                "justification": "kind",
+            },
+            {
+                "metric_name": "safety",
+                "category": "safe",
+                "justification": "ok",
+            },
+        ]
+    )
+
+    mock_response = MagicMock()
+    mock_response.text = raw_response
+    mock_client, _ = _make_genai_client(mock_response)
+
+    with _mock_genai_modules(mock_client):
+      results = _run(classify_sessions_via_api(transcripts, config))
+
+    assert len(results) == 1
+    assert results[0].session_id == "s1"
+    assert results[0].metrics[0].category == "positive"
+    assert results[0].metrics[1].category == "safe"
+
+  def test_api_exception_per_session(self):
+    """API failure for one session should produce parse errors for that
+    session but not crash the whole run."""
+    config = _make_config()
+    transcripts = {"s1": "transcript1", "s2": "transcript2"}
+
+    good_response = MagicMock()
+    good_response.text = json.dumps(
+        [
+            {"metric_name": "tone", "category": "positive"},
+            {"metric_name": "safety", "category": "safe"},
+        ]
+    )
+
+    mock_client, _ = _make_genai_client(
+        [good_response, Exception("API quota exceeded")]
+    )
+
+    with _mock_genai_modules(mock_client):
+      results = _run(classify_sessions_via_api(transcripts, config))
+
+    assert len(results) == 2
+    # First session should succeed.
+    assert results[0].metrics[0].category == "positive"
+    # Second session should have parse errors.
+    assert all(m.parse_error for m in results[1].metrics)
+
+  def test_import_error_propagates(self):
+    """When google-genai is not installed, ImportError should propagate
+    so the caller can set the correct execution mode."""
+    config = _make_config()
+    transcripts = {"s1": "transcript1"}
+
+    import builtins
+    import sys
+
+    saved = {}
+    for key in list(sys.modules):
+      if key.startswith("google.genai") or key == "google.genai":
+        saved[key] = sys.modules.pop(key)
+
+    original_import = builtins.__import__
+
+    def mock_import(name, *args, **kwargs):
+      if name == "google" or name.startswith("google.genai"):
+        raise ImportError("No module named 'google.genai'")
+      return original_import(name, *args, **kwargs)
+
+    with pytest.raises(ImportError):
+      with patch.object(builtins, "__import__", side_effect=mock_import):
+        _run(classify_sessions_via_api(transcripts, config))
+
+    sys.modules.update(saved)
+
+  def test_case_insensitive_api_response(self):
+    """API response with mixed-case categories should normalize."""
+    config = _make_config()
+    transcripts = {"s1": "USER: Hello"}
+
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        [
+            {"metric_name": "tone", "category": "POSITIVE"},
+            {"metric_name": "safety", "category": "Safe"},
+        ]
+    )
+    mock_client, _ = _make_genai_client(mock_response)
+
+    with _mock_genai_modules(mock_client):
+      results = _run(classify_sessions_via_api(transcripts, config))
+
+    assert results[0].metrics[0].category == "positive"
+    assert results[0].metrics[1].category == "safe"
+
+  def test_long_transcript_truncated(self):
+    """Transcripts longer than 25000 chars should be truncated."""
+    config = _make_config()
+    long_text = "x" * 30000
+    transcripts = {"s1": long_text}
+
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        [
+            {"metric_name": "tone", "category": "neutral"},
+            {"metric_name": "safety", "category": "safe"},
+        ]
+    )
+    mock_client, mock_aio_models = _make_genai_client(mock_response)
+
+    with _mock_genai_modules(mock_client):
+      results = _run(classify_sessions_via_api(transcripts, config))
+
+    # Verify the prompt was truncated by checking what was passed.
+    call_args = mock_aio_models.generate_content.call_args
+    prompt_sent = call_args[1]["contents"]
+    assert "[truncated]" in prompt_sent

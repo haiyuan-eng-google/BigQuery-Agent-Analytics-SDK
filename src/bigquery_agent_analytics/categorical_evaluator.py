@@ -15,7 +15,8 @@
 """Categorical evaluation engine for BigQuery Agent Analytics SDK.
 
 Classifies agent sessions into user-defined categories using BigQuery's
-native ``AI.GENERATE``. Unlike the numeric ``CodeEvaluator`` and
+native ``AI.GENERATE``, with Gemini API fallback when BigQuery-native
+execution is unavailable. Unlike the numeric ``CodeEvaluator`` and
 ``LLMAsJudge`` report paths, this module returns label-valued results
 with strict category validation.
 
@@ -195,6 +196,30 @@ class CategoricalEvaluationReport(BaseModel):
 # ------------------------------------------------------------------ #
 # SQL Template                                                         #
 # ------------------------------------------------------------------ #
+
+CATEGORICAL_TRANSCRIPT_QUERY = """\
+SELECT
+  session_id,
+  STRING_AGG(
+    CONCAT(
+      event_type,
+      COALESCE(CONCAT(' [', agent, ']'), ''),
+      ': ',
+      COALESCE(
+        JSON_VALUE(content, '$.text_summary'),
+        JSON_VALUE(content, '$.response'),
+        JSON_VALUE(content, '$.tool'),
+        ''
+      )
+    ),
+    '\\n' ORDER BY timestamp
+  ) AS transcript
+FROM `{project}.{dataset}.{table}`
+WHERE {where}
+GROUP BY session_id
+HAVING LENGTH(transcript) > 10
+LIMIT @trace_limit
+"""
 
 CATEGORICAL_AI_GENERATE_QUERY = """\
 WITH session_transcripts AS (
@@ -505,3 +530,87 @@ def build_categorical_report(
       },
       session_results=session_results,
   )
+
+
+# ------------------------------------------------------------------ #
+# Gemini API Fallback                                                  #
+# ------------------------------------------------------------------ #
+
+
+async def classify_sessions_via_api(
+    transcripts: dict[str, str],
+    config: CategoricalEvaluationConfig,
+    endpoint: str = DEFAULT_ENDPOINT,
+) -> list[CategoricalSessionResult]:
+  """Classifies sessions using the Gemini API (fallback).
+
+  Reuses the same prompt-building and validation logic as the
+  BigQuery-native ``AI.GENERATE`` path so that results are
+  shape-compatible regardless of execution mode.
+
+  Args:
+      transcripts: Maps ``session_id`` to transcript text.
+      config: Categorical evaluation configuration.
+      endpoint: Model endpoint name.
+
+  Returns:
+      One ``CategoricalSessionResult`` per session.
+  """
+  prompt_prefix = build_categorical_prompt(config)
+  results: list[CategoricalSessionResult] = []
+
+  try:
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client()
+
+    for sid, transcript in transcripts.items():
+      text = transcript
+      if len(text) > 25000:
+        text = text[:25000] + "\n... [truncated]"
+
+      full_prompt = prompt_prefix + "\n\nTranscript:\n" + text
+
+      try:
+        response = await client.aio.models.generate_content(
+            model=endpoint,
+            contents=full_prompt,
+            config=types.GenerateContentConfig(
+                temperature=config.temperature,
+                max_output_tokens=1024,
+            ),
+        )
+        raw_text = response.text.strip()
+        metrics = parse_classifications(raw_text, config)
+        results.append(
+            CategoricalSessionResult(
+                session_id=sid,
+                metrics=metrics,
+            )
+        )
+      except Exception as e:
+        logger.warning(
+            "Categorical API classification failed for %s: %s",
+            sid,
+            e,
+        )
+        results.append(
+            CategoricalSessionResult(
+                session_id=sid,
+                metrics=[
+                    CategoricalMetricResult(
+                        metric_name=m.name,
+                        parse_error=True,
+                        passed_validation=False,
+                        raw_response=str(e),
+                    )
+                    for m in config.metrics
+                ],
+            )
+        )
+  except ImportError:
+    logger.warning("google-genai not installed; cannot run API fallback.")
+    raise
+
+  return results

@@ -56,8 +56,10 @@ from google.cloud import bigquery
 from .categorical_evaluator import build_categorical_prompt
 from .categorical_evaluator import build_categorical_report
 from .categorical_evaluator import CATEGORICAL_AI_GENERATE_QUERY
+from .categorical_evaluator import CATEGORICAL_TRANSCRIPT_QUERY
 from .categorical_evaluator import CategoricalEvaluationConfig
 from .categorical_evaluator import CategoricalEvaluationReport
+from .categorical_evaluator import classify_sessions_via_api
 from .categorical_evaluator import parse_categorical_row
 from .evaluators import _parse_json_from_text
 from .evaluators import AI_GENERATE_JUDGE_BATCH_QUERY
@@ -1172,7 +1174,8 @@ class Client:
     """Runs categorical evaluation over traces.
 
     Classifies agent sessions into user-defined categories using
-    BigQuery's native ``AI.GENERATE``.
+    BigQuery's native ``AI.GENERATE``.  Falls back to the Gemini
+    API when ``AI.GENERATE`` is unavailable or fails.
 
     Args:
         config: Categorical evaluation configuration with metric
@@ -1200,6 +1203,70 @@ class Client:
     else:
       endpoint = self.endpoint
 
+    table_ref = f"{self.project_id}.{self.dataset_id}.{table}"
+    fallback_reason = None
+
+    # Try AI.GENERATE first.
+    try:
+      session_results = self._categorical_ai_generate(
+          config,
+          table,
+          where,
+          params,
+          endpoint,
+      )
+      report = build_categorical_report(
+          dataset=f"{table_ref} WHERE {where}",
+          session_results=session_results,
+          config=config,
+      )
+      report.details["execution_mode"] = "ai_generate"
+      return report
+    except Exception as e:
+      logger.debug(
+          "AI.GENERATE categorical failed, falling back to API: %s",
+          e,
+      )
+      fallback_reason = str(e)
+
+    # Fallback: Gemini API.
+    try:
+      session_results = self._categorical_api_fallback(
+          config,
+          table,
+          where,
+          params,
+          endpoint,
+      )
+      report = build_categorical_report(
+          dataset=f"{table_ref} WHERE {where}",
+          session_results=session_results,
+          config=config,
+      )
+      report.details["execution_mode"] = "api_fallback"
+      report.details["fallback_reason"] = fallback_reason
+      return report
+    except ImportError:
+      # google-genai not installed — API fallback is unavailable.
+      report = build_categorical_report(
+          dataset=f"{table_ref} WHERE {where}",
+          session_results=[],
+          config=config,
+      )
+      report.details["execution_mode"] = "api_unavailable"
+      report.details["fallback_reason"] = fallback_reason
+      report.details["api_error"] = "google-genai not installed"
+      return report
+
+  def _categorical_ai_generate(
+      self,
+      config: CategoricalEvaluationConfig,
+      table: str,
+      where: str,
+      params: list,
+      endpoint: str,
+  ) -> list:
+    """Classifies sessions using BigQuery AI.GENERATE."""
     prompt = build_categorical_prompt(config)
 
     query = CATEGORICAL_AI_GENERATE_QUERY.format(
@@ -1229,13 +1296,38 @@ class Client:
       r = dict(row)
       sid = r.get("session_id", "unknown")
       session_results.append(parse_categorical_row(sid, r, config))
+    return session_results
 
-    table_ref = f"{self.project_id}.{self.dataset_id}.{table}"
-    return build_categorical_report(
-        dataset=f"{table_ref} WHERE {where}",
-        session_results=session_results,
-        config=config,
+  def _categorical_api_fallback(
+      self,
+      config: CategoricalEvaluationConfig,
+      table: str,
+      where: str,
+      params: list,
+      endpoint: str,
+  ) -> list:
+    """Classifies sessions using the Gemini API (fallback).
+
+    Fetches transcripts from BigQuery using the same
+    transcript-building CTE as the ``AI.GENERATE`` path,
+    then classifies each session via the Gemini API.
+    """
+    query = CATEGORICAL_TRANSCRIPT_QUERY.format(
+        project=self.project_id,
+        dataset=self.dataset_id,
+        table=table,
+        where=where,
     )
+    job_config = bigquery.QueryJobConfig(query_parameters=list(params))
+    rows = list(self.bq_client.query(query, job_config=job_config).result())
+
+    transcripts = {}
+    for row in rows:
+      r = dict(row)
+      sid = r.get("session_id", "unknown")
+      transcripts[sid] = r.get("transcript", "")
+
+    return _run_sync(classify_sessions_via_api(transcripts, config, endpoint))
 
   # -------------------------------------------------------------- #
   # Feedback & Curation                                              #

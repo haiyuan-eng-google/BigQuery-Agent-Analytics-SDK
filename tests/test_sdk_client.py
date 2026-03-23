@@ -1163,3 +1163,144 @@ class TestEvaluateCategoricalDataset:
     config = _make_categorical_config()
     report = client.evaluate_categorical(config=config)
     assert "agent_events" in report.dataset
+
+
+class TestEvaluateCategoricalFallback:
+  """Tests for AI.GENERATE → Gemini API fallback in evaluate_categorical."""
+
+  def test_ai_generate_success_sets_execution_mode(self):
+    """When AI.GENERATE succeeds, execution_mode should be 'ai_generate'."""
+    mock_bq = _mock_bq_client()
+    mock_bq.query.return_value.result.return_value = iter([])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    config = _make_categorical_config()
+    report = client.evaluate_categorical(config=config)
+    assert report.details["execution_mode"] == "ai_generate"
+
+  def test_ai_generate_failure_triggers_api_fallback(self):
+    """When AI.GENERATE raises, should fall back to Gemini API."""
+    mock_bq = _mock_bq_client()
+
+    # First call (AI.GENERATE) raises; second call (transcript fetch)
+    # returns one session.
+    transcript_row = MagicMock()
+    transcript_row.__iter__ = lambda self: iter(
+        [("session_id", "s1"), ("transcript", "USER: Hello")]
+    )
+    transcript_row.keys = lambda: ["session_id", "transcript"]
+
+    call_count = [0]
+
+    def query_side_effect(*args, **kwargs):
+      call_count[0] += 1
+      result = MagicMock()
+      if call_count[0] == 1:
+        # AI.GENERATE query fails.
+        result.result.side_effect = Exception("AI.GENERATE not available")
+      else:
+        # Transcript query succeeds.
+        result.result.return_value = iter(
+            [
+                {"session_id": "s1", "transcript": "USER: Hello"},
+            ]
+        )
+      return result
+
+    mock_bq.query.side_effect = query_side_effect
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    config = _make_categorical_config()
+
+    with patch(
+        "bigquery_agent_analytics.client.classify_sessions_via_api",
+    ) as mock_api:
+      import asyncio
+
+      from bigquery_agent_analytics.categorical_evaluator import CategoricalMetricResult
+      from bigquery_agent_analytics.categorical_evaluator import CategoricalSessionResult
+
+      async def fake_api(transcripts, config, endpoint):
+        return [
+            CategoricalSessionResult(
+                session_id="s1",
+                metrics=[
+                    CategoricalMetricResult(
+                        metric_name=m.name,
+                        category=m.categories[0].name,
+                    )
+                    for m in config.metrics
+                ],
+            )
+        ]
+
+      mock_api.side_effect = fake_api
+      report = client.evaluate_categorical(config=config)
+
+    assert report.details["execution_mode"] == "api_fallback"
+    assert "AI.GENERATE not available" in report.details["fallback_reason"]
+    assert report.total_sessions == 1
+
+  def test_fallback_reason_absent_on_success(self):
+    """On AI.GENERATE success, there should be no fallback_reason."""
+    mock_bq = _mock_bq_client()
+    mock_bq.query.return_value.result.return_value = iter([])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    config = _make_categorical_config()
+    report = client.evaluate_categorical(config=config)
+    assert "fallback_reason" not in report.details
+
+  def test_api_unavailable_when_genai_not_installed(self):
+    """When AI.GENERATE fails and google-genai is missing, report
+    should have execution_mode='api_unavailable'."""
+    mock_bq = _mock_bq_client()
+
+    call_count = [0]
+
+    def query_side_effect(*args, **kwargs):
+      call_count[0] += 1
+      result = MagicMock()
+      if call_count[0] == 1:
+        result.result.side_effect = Exception("AI.GENERATE not available")
+      else:
+        result.result.return_value = iter(
+            [
+                {"session_id": "s1", "transcript": "USER: Hello"},
+            ]
+        )
+      return result
+
+    mock_bq.query.side_effect = query_side_effect
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    config = _make_categorical_config()
+
+    with patch(
+        "bigquery_agent_analytics.client.classify_sessions_via_api",
+        side_effect=ImportError("No module named 'google.genai'"),
+    ):
+      report = client.evaluate_categorical(config=config)
+
+    assert report.details["execution_mode"] == "api_unavailable"
+    assert report.details["api_error"] == "google-genai not installed"
+    assert "AI.GENERATE not available" in report.details["fallback_reason"]
+    assert report.total_sessions == 0
