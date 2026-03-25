@@ -63,7 +63,7 @@ def _build_client(
     project_id: str,
     dataset_id: str,
     table_id: str,
-    location: str,
+    location: Optional[str] = None,
     endpoint: Optional[str] = None,
     connection_id: Optional[str] = None,
 ):
@@ -142,7 +142,7 @@ def doctor(
         ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
     ),
     table_id: str = typer.Option("agent_events", help="Events table name."),
-    location: str = typer.Option("us-central1", help="BQ location."),
+    location: Optional[str] = typer.Option(None, help="BQ location."),
     fmt: str = typer.Option(
         "json",
         "--format",
@@ -168,7 +168,7 @@ def get_trace(
         ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
     ),
     table_id: str = typer.Option("agent_events", help="Events table name."),
-    location: str = typer.Option("us-central1", help="BQ location."),
+    location: Optional[str] = typer.Option(None, help="BQ location."),
     session_id: Optional[str] = typer.Option(
         None, help="Retrieve by session ID."
     ),
@@ -207,7 +207,7 @@ def evaluate(
         ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
     ),
     table_id: str = typer.Option("agent_events", help="Events table name."),
-    location: str = typer.Option("us-central1", help="BQ location."),
+    location: Optional[str] = typer.Option(None, help="BQ location."),
     evaluator: str = typer.Option(
         "latency",
         help=(
@@ -309,7 +309,7 @@ def insights(
         ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
     ),
     table_id: str = typer.Option("agent_events", help="Events table name."),
-    location: str = typer.Option("us-central1", help="BQ location."),
+    location: Optional[str] = typer.Option(None, help="BQ location."),
     agent_id: Optional[str] = typer.Option(None, help="Filter by agent name."),
     last: Optional[str] = typer.Option(
         None,
@@ -352,7 +352,7 @@ def drift(
         ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
     ),
     table_id: str = typer.Option("agent_events", help="Events table name."),
-    location: str = typer.Option("us-central1", help="BQ location."),
+    location: Optional[str] = typer.Option(None, help="BQ location."),
     golden_dataset: str = typer.Option(
         ..., help="Golden dataset name for comparison."
     ),
@@ -395,7 +395,7 @@ def distribution(
         ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
     ),
     table_id: str = typer.Option("agent_events", help="Events table name."),
-    location: str = typer.Option("us-central1", help="BQ location."),
+    location: Optional[str] = typer.Option(None, help="BQ location."),
     agent_id: Optional[str] = typer.Option(None, help="Filter by agent name."),
     last: Optional[str] = typer.Option(
         None,
@@ -446,7 +446,7 @@ def hitl_metrics(
         ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
     ),
     table_id: str = typer.Option("agent_events", help="Events table name."),
-    location: str = typer.Option("us-central1", help="BQ location."),
+    location: Optional[str] = typer.Option(None, help="BQ location."),
     agent_id: Optional[str] = typer.Option(None, help="Filter by agent name."),
     last: Optional[str] = typer.Option(
         None,
@@ -483,7 +483,7 @@ def list_traces(
         ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
     ),
     table_id: str = typer.Option("agent_events", help="Events table name."),
-    location: str = typer.Option("us-central1", help="BQ location."),
+    location: Optional[str] = typer.Option(None, help="BQ location."),
     session_id: Optional[str] = typer.Option(
         None, help="Filter by session ID."
     ),
@@ -529,7 +529,7 @@ def categorical_eval(
         ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
     ),
     table_id: str = typer.Option("agent_events", help="Events table name."),
-    location: str = typer.Option("us-central1", help="BQ location."),
+    location: Optional[str] = typer.Option(None, help="BQ location."),
     metrics_file: Path = typer.Option(
         ...,
         help="JSON file with metric definitions.",
@@ -650,7 +650,7 @@ def categorical_views(
     results_table: str = typer.Option(
         "categorical_results", help="Source results table name."
     ),
-    location: str = typer.Option("us-central1", help="BQ location."),
+    location: Optional[str] = typer.Option(None, help="BQ location."),
     prefix: str = typer.Option("", help="View name prefix."),
     fmt: str = typer.Option(
         "json",

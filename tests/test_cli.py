@@ -1389,7 +1389,7 @@ class TestCategoricalViews:
     mock_cls.assert_called_once()
     call_kwargs = mock_cls.call_args[1]
     assert call_kwargs["view_prefix"] == "adk_"
-    assert call_kwargs["location"] == "us-central1"
+    assert call_kwargs["location"] is None
 
   @patch("bigquery_agent_analytics.categorical_views.CategoricalViewManager")
   def test_categorical_views_custom_table(self, mock_cls):

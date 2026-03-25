@@ -293,7 +293,8 @@ class Client:
       table_id: Table name for agent events. Pass ``"auto"``
           to auto-detect (tries ``agent_events`` first, then
           ``agent_events_v2``).
-      location: BigQuery dataset location.
+      location: BigQuery dataset location. When *None* (default),
+          the BigQuery client uses its own default (typically ``US``).
       gcs_bucket_name: Optional GCS bucket name (reserved for future
           GCS-offloaded payload resolution; not yet implemented).
       verify_schema: Whether to verify the table schema on init.
@@ -310,7 +311,7 @@ class Client:
       project_id: str,
       dataset_id: str,
       table_id: str = "agent_events",
-      location: str = "us-central1",
+      location: Optional[str] = None,
       gcs_bucket_name: Optional[str] = None,
       verify_schema: bool = True,
       bq_client: Optional[bigquery.Client] = None,
@@ -339,10 +340,10 @@ class Client:
   def bq_client(self) -> bigquery.Client:
     """Lazily initializes the BigQuery client."""
     if self._bq_client is None:
-      self._bq_client = bigquery.Client(
-          project=self.project_id,
-          location=self.location,
-      )
+      kwargs: dict = {"project": self.project_id}
+      if self.location:
+        kwargs["location"] = self.location
+      self._bq_client = bigquery.Client(**kwargs)
     return self._bq_client
 
   # -------------------------------------------------------------- #
