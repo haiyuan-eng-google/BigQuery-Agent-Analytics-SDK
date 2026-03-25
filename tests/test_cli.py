@@ -1287,6 +1287,43 @@ class TestCategoricalEval:
     assert result.exit_code == 2
 
   @patch("bigquery_agent_analytics.cli._build_client")
+  def test_categorical_eval_required_false_passthrough(
+      self, mock_build, tmp_path
+  ):
+    """Metrics with required=false in JSON should preserve the field."""
+    client = MagicMock()
+    client.evaluate_categorical.return_value = _mock_categorical_report()
+    mock_build.return_value = client
+
+    metrics_with_optional = [
+        {
+            "name": "tone",
+            "definition": "Overall tone.",
+            "required": False,
+            "categories": [
+                {"name": "positive", "definition": "User is satisfied."},
+                {"name": "negative", "definition": "User is frustrated."},
+            ],
+        },
+    ]
+    metrics_path = tmp_path / "metrics.json"
+    metrics_path.write_text(json.dumps(metrics_with_optional))
+
+    result = runner.invoke(
+        app,
+        [
+            "categorical-eval",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            f"--metrics-file={str(metrics_path)}",
+        ],
+    )
+    assert result.exit_code == 0
+    call_kwargs = client.evaluate_categorical.call_args[1]
+    config = call_kwargs["config"]
+    assert config.metrics[0].required is False
+
+  @patch("bigquery_agent_analytics.cli._build_client")
   def test_categorical_eval_empty_metrics_exit_2(self, mock_build, tmp_path):
     metrics_path = tmp_path / "metrics.json"
     metrics_path.write_text("[]")

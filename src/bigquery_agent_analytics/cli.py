@@ -545,10 +545,6 @@ def categorical_eval(
         None,
         help="Model endpoint for classification.",
     ),
-    connection_id: Optional[str] = typer.Option(
-        None,
-        help="BQ connection ID for AI.GENERATE.",
-    ),
     include_justification: bool = typer.Option(
         True,
         help="Include justification in output.",
@@ -589,13 +585,14 @@ def categorical_eval(
           )
           for c in m["categories"]
       ]
-      metrics.append(
-          CategoricalMetricDefinition(
-              name=m["name"],
-              definition=m["definition"],
-              categories=cats,
-          )
-      )
+      metric_kwargs: dict = {
+          "name": m["name"],
+          "definition": m["definition"],
+          "categories": cats,
+      }
+      if "required" in m:
+        metric_kwargs["required"] = m["required"]
+      metrics.append(CategoricalMetricDefinition(**metric_kwargs))
 
     if not metrics:
       typer.echo("Error: no metrics found in metrics file.", err=True)
@@ -626,7 +623,6 @@ def categorical_eval(
         table_id,
         location,
         endpoint=endpoint,
-        connection_id=connection_id,
     )
     report = client.evaluate_categorical(config=config, filters=filters)
     typer.echo(format_output(report, fmt))
