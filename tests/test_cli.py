@@ -1338,3 +1338,90 @@ class TestCategoricalEval:
         ],
     )
     assert result.exit_code == 2
+
+
+# ------------------------------------------------------------------ #
+# categorical-views                                                    #
+# ------------------------------------------------------------------ #
+
+
+class TestCategoricalViews:
+
+  @patch("bigquery_agent_analytics.categorical_views.CategoricalViewManager")
+  def test_categorical_views_json(self, mock_cls):
+    vm = MagicMock()
+    vm.create_all_views.return_value = {
+        "categorical_results_latest": "categorical_results_latest",
+        "categorical_daily_counts": "categorical_daily_counts",
+    }
+    mock_cls.return_value = vm
+
+    result = runner.invoke(
+        app,
+        [
+            "categorical-views",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert "categorical_results_latest" in parsed
+
+  @patch("bigquery_agent_analytics.categorical_views.CategoricalViewManager")
+  def test_categorical_views_with_prefix(self, mock_cls):
+    vm = MagicMock()
+    vm.create_all_views.return_value = {
+        "categorical_results_latest": "adk_categorical_results_latest",
+    }
+    mock_cls.return_value = vm
+
+    result = runner.invoke(
+        app,
+        [
+            "categorical-views",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--prefix=adk_",
+        ],
+    )
+    assert result.exit_code == 0
+    mock_cls.assert_called_once()
+    call_kwargs = mock_cls.call_args[1]
+    assert call_kwargs["view_prefix"] == "adk_"
+    assert call_kwargs["location"] is None
+
+  @patch("bigquery_agent_analytics.categorical_views.CategoricalViewManager")
+  def test_categorical_views_custom_table(self, mock_cls):
+    vm = MagicMock()
+    vm.create_all_views.return_value = {}
+    mock_cls.return_value = vm
+
+    result = runner.invoke(
+        app,
+        [
+            "categorical-views",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--results-table=my_results",
+        ],
+    )
+    assert result.exit_code == 0
+    call_kwargs = mock_cls.call_args[1]
+    assert call_kwargs["results_table"] == "my_results"
+
+  @patch("bigquery_agent_analytics.categorical_views.CategoricalViewManager")
+  def test_categorical_views_error_exit_2(self, mock_cls):
+    vm = MagicMock()
+    vm.create_all_views.side_effect = RuntimeError("BQ fail")
+    mock_cls.return_value = vm
+
+    result = runner.invoke(
+        app,
+        [
+            "categorical-views",
+            "--project-id=proj",
+            "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 2

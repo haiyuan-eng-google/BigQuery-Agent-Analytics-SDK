@@ -1540,3 +1540,64 @@ class TestEvaluateCategoricalPersistence:
     assert report.details["persisted"] is False
     assert report.details["persist_note"] == "no sessions to persist"
     mock_bq.insert_rows_json.assert_not_called()
+
+
+# ------------------------------------------------------------------ #
+# create_categorical_views                                             #
+# ------------------------------------------------------------------ #
+
+
+class TestCreateCategoricalViews:
+
+  def test_delegates_to_view_manager(self):
+    mock_bq = _mock_bq_client()
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    with patch(
+        "bigquery_agent_analytics.categorical_views.CategoricalViewManager"
+    ) as mock_cls:
+      vm = MagicMock()
+      vm.create_all_views.return_value = {
+          "categorical_results_latest": "categorical_results_latest",
+      }
+      mock_cls.return_value = vm
+
+      result = client.create_categorical_views()
+
+      mock_cls.assert_called_once_with(
+          project_id="proj",
+          dataset_id="ds",
+          results_table="categorical_results",
+          view_prefix="",
+          location=None,
+          bq_client=mock_bq,
+      )
+      assert "categorical_results_latest" in result
+
+  def test_custom_table_and_prefix(self):
+    mock_bq = _mock_bq_client()
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    with patch(
+        "bigquery_agent_analytics.categorical_views.CategoricalViewManager"
+    ) as mock_cls:
+      vm = MagicMock()
+      vm.create_all_views.return_value = {}
+      mock_cls.return_value = vm
+
+      client.create_categorical_views(
+          results_table="my_results",
+          view_prefix="adk_",
+      )
+
+      call_kwargs = mock_cls.call_args[1]
+      assert call_kwargs["results_table"] == "my_results"
+      assert call_kwargs["view_prefix"] == "adk_"

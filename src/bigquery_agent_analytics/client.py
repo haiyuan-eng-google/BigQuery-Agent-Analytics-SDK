@@ -293,7 +293,8 @@ class Client:
       table_id: Table name for agent events. Pass ``"auto"``
           to auto-detect (tries ``agent_events`` first, then
           ``agent_events_v2``).
-      location: BigQuery dataset location.
+      location: BigQuery dataset location. When *None* (default),
+          the BigQuery client uses its own default (typically ``US``).
       gcs_bucket_name: Optional GCS bucket name (reserved for future
           GCS-offloaded payload resolution; not yet implemented).
       verify_schema: Whether to verify the table schema on init.
@@ -310,7 +311,7 @@ class Client:
       project_id: str,
       dataset_id: str,
       table_id: str = "agent_events",
-      location: str = "us-central1",
+      location: Optional[str] = None,
       gcs_bucket_name: Optional[str] = None,
       verify_schema: bool = True,
       bq_client: Optional[bigquery.Client] = None,
@@ -339,10 +340,10 @@ class Client:
   def bq_client(self) -> bigquery.Client:
     """Lazily initializes the BigQuery client."""
     if self._bq_client is None:
-      self._bq_client = bigquery.Client(
-          project=self.project_id,
-          location=self.location,
-      )
+      kwargs: dict = {"project": self.project_id}
+      if self.location:
+        kwargs["location"] = self.location
+      self._bq_client = bigquery.Client(**kwargs)
     return self._bq_client
 
   # -------------------------------------------------------------- #
@@ -1389,6 +1390,40 @@ class Client:
       )
       report.details["persisted"] = False
       report.details["persist_error"] = str(e)
+
+  # -------------------------------------------------------------- #
+  # Categorical Views                                                #
+  # -------------------------------------------------------------- #
+
+  def create_categorical_views(
+      self,
+      results_table: Optional[str] = None,
+      view_prefix: str = "",
+  ) -> dict[str, str]:
+    """Creates dashboard views over categorical evaluation results.
+
+    Delegates to :class:`CategoricalViewManager` to create a dedup
+    base view and aggregated dashboard views.
+
+    Args:
+        results_table: Results table name. Defaults to
+            ``categorical_results``.
+        view_prefix: Optional prefix for view names.
+
+    Returns:
+        A dict mapping view name to prefixed view name.
+    """
+    from .categorical_views import CategoricalViewManager
+
+    vm = CategoricalViewManager(
+        project_id=self.project_id,
+        dataset_id=self.dataset_id,
+        results_table=results_table or DEFAULT_RESULTS_TABLE,
+        view_prefix=view_prefix,
+        location=self.location,
+        bq_client=self.bq_client,
+    )
+    return vm.create_all_views()
 
   # -------------------------------------------------------------- #
   # Feedback & Curation                                              #

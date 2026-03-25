@@ -338,6 +338,17 @@ except ImportError as e:
       e,
   )
 
+# Categorical Views
+try:
+  from .categorical_views import CategoricalViewManager
+
+  __all__.append("CategoricalViewManager")
+except ImportError as e:
+  logger.debug(
+      "Could not import categorical views: %s.",
+      e,
+  )
+
 # BigFrames Evaluator (optional bigframes dependency)
 try:
   from .bigframes_evaluator import BigFramesEvaluator
