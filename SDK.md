@@ -19,7 +19,7 @@ client = Client(
     project_id="my-gcp-project",
     dataset_id="agent_analytics",
     table_id="agent_events",          # default table name
-    location="us-central1",           # BigQuery dataset location
+    location="US",                    # BigQuery dataset location (None = auto)
     gcs_bucket_name="my-trace-bucket",# optional: for GCS-offloaded payloads
     endpoint="gemini-2.5-flash",      # AI.GENERATE endpoint for LLM evals
     connection_id="us.my-connection", # optional: BQ connection for AI funcs
@@ -31,7 +31,7 @@ client = Client(
 | `project_id` | `str` | *required* | Google Cloud project ID |
 | `dataset_id` | `str` | *required* | BigQuery dataset containing traces |
 | `table_id` | `str` | `"agent_events"` | BigQuery table name |
-| `location` | `str` | `"us-central1"` | Dataset location |
+| `location` | `str \| None` | `None` | Dataset location (auto-detected when omitted) |
 | `gcs_bucket_name` | `str \| None` | `None` | GCS bucket for offloaded payloads |
 | `verify_schema` | `bool` | `True` | Validate table schema on init |
 | `endpoint` | `str \| None` | `None` | AI.GENERATE endpoint name |
@@ -1207,7 +1207,218 @@ print(vm.get_view_sql("TOOL_COMPLETED"))
 
 ---
 
-## 17. Context Graph (Property Graph for Agentic Ads)
+## 17. Categorical Evaluation & Real-Time Dashboards
+
+The **Categorical Evaluator** classifies agent sessions into user-defined categories (e.g. tone: positive/negative/neutral, outcome: resolved/escalated/dropped) using BigQuery's `AI.GENERATE` with automatic Gemini API fallback. Results are persisted to an append-only table and deduplicated at read time via dashboard views.
+
+### Step 1: Define Metrics
+
+Create a JSON file with your metric definitions:
+
+```json
+[
+  {
+    "name": "tone",
+    "definition": "Overall tone of the agent conversation.",
+    "categories": [
+      { "name": "positive", "definition": "User expressed satisfaction." },
+      { "name": "negative", "definition": "User expressed frustration." },
+      { "name": "neutral", "definition": "No strong sentiment detected." }
+    ]
+  },
+  {
+    "name": "outcome",
+    "definition": "How the conversation ended.",
+    "categories": [
+      { "name": "resolved", "definition": "User's issue was fully addressed." },
+      { "name": "escalated", "definition": "Conversation was handed off to a human." },
+      { "name": "dropped", "definition": "User abandoned the conversation." }
+    ]
+  }
+]
+```
+
+Save this as `metrics.json`.
+
+### Step 2: Run a Batch Evaluation (CLI)
+
+```bash
+# Evaluate all sessions from the last 24 hours and persist results
+bq-agent-sdk categorical-eval \
+  --project-id=my-project \
+  --dataset-id=agent_analytics \
+  --metrics-file=metrics.json \
+  --last=24h \
+  --persist \
+  --prompt-version=v1
+```
+
+Key options:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--metrics-file` | *required* | Path to JSON metric definitions |
+| `--last` | *all* | Time window: `5m`, `1h`, `24h`, `7d`, `30d` |
+| `--persist` | `false` | Write results to BigQuery |
+| `--results-table` | `categorical_results` | Destination table name |
+| `--prompt-version` | `None` | Version tag for reproducibility |
+| `--endpoint` | `gemini-2.5-flash` | Model endpoint for classification |
+| `--limit` | `100` | Max sessions to evaluate |
+
+### Step 2 (Alternative): Run via Python SDK
+
+```python
+from bigquery_agent_analytics import (
+    Client,
+    CategoricalEvaluationConfig,
+    CategoricalMetricDefinition,
+    CategoricalMetricCategory,
+    TraceFilter,
+)
+
+client = Client(project_id="my-project", dataset_id="agent_analytics")
+
+config = CategoricalEvaluationConfig(
+    metrics=[
+        CategoricalMetricDefinition(
+            name="tone",
+            definition="Overall tone of the conversation.",
+            categories=[
+                CategoricalMetricCategory(name="positive", definition="User satisfied."),
+                CategoricalMetricCategory(name="negative", definition="User frustrated."),
+                CategoricalMetricCategory(name="neutral", definition="No strong sentiment."),
+            ],
+        ),
+    ],
+    persist_results=True,
+    prompt_version="v1",
+)
+
+report = client.evaluate_categorical(
+    config=config,
+    filters=TraceFilter(last="24h"),
+)
+
+print(report.category_distributions)
+# {'tone': {'positive': 42, 'negative': 12, 'neutral': 46}}
+```
+
+### Step 3: Create Dashboard Views
+
+The results table is append-only (uses streaming inserts). Retries and overlapping runs will produce duplicate rows. The dashboard views deduplicate at read time.
+
+```bash
+# Create all 4 dashboard views
+bq-agent-sdk categorical-views \
+  --project-id=my-project \
+  --dataset-id=agent_analytics
+```
+
+Or via Python:
+
+```python
+client.create_categorical_views()
+```
+
+This creates 4 views:
+
+| View | Description |
+|------|-------------|
+| `categorical_results_latest` | Dedup base — keeps latest row per (session, metric, prompt_version) |
+| `categorical_daily_counts` | Daily category counts by metric and execution_mode |
+| `categorical_hourly_counts` | Hourly category counts for near-real-time dashboards |
+| `categorical_operational_metrics` | Parse error rate, validation failures, fallback rate by day |
+
+**Hard rule:** All dashboards and alerts must query `categorical_results_latest` (or the views built on it), never the raw `categorical_results` table.
+
+### Step 4: Set Up Real-Time Micro-Batch Evaluation
+
+The evaluator supports narrow time windows for near-real-time classification. Schedule `--last=5m --persist` on a 5-minute cron cycle:
+
+```bash
+# Cron: evaluate the last 5 minutes, every 5 minutes
+*/5 * * * * bq-agent-sdk categorical-eval \
+  --project-id=my-project \
+  --dataset-id=agent_analytics \
+  --metrics-file=/path/to/metrics.json \
+  --last=5m \
+  --persist \
+  --prompt-version=v2 \
+  >> /var/log/categorical-eval.log 2>&1
+```
+
+Overlapping windows are safe — the dedup view keeps only the latest classification per key, so counts remain correct regardless of retries or overlaps.
+
+For containerized environments, wrap the CLI in a Cloud Run Job:
+
+```bash
+# Create the job
+gcloud run jobs create categorical-eval-job \
+  --image=IMAGE_URL \
+  --command="bq-agent-sdk" \
+  --args="categorical-eval,--project-id=PROJECT,--dataset-id=DATASET,--metrics-file=/config/metrics.json,--last=5m,--persist,--prompt-version=v2"
+
+# Schedule it
+gcloud scheduler jobs create http categorical-eval-schedule \
+  --schedule="*/5 * * * *" \
+  --uri="https://REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/PROJECT/jobs/categorical-eval-job:run" \
+  --http-method=POST \
+  --oauth-service-account-email=SA_EMAIL
+```
+
+### Step 5: Build Dashboards
+
+Query the pre-aggregated views from Looker Studio, Grafana, or any BI tool.
+
+**Category trend over time:**
+```sql
+SELECT eval_date, category, session_count
+FROM `my-project.agent_analytics.categorical_daily_counts`
+WHERE metric_name = 'tone'
+ORDER BY eval_date, category;
+```
+
+**Live monitoring (last 1 hour):**
+```sql
+SELECT eval_hour, category, session_count
+FROM `my-project.agent_analytics.categorical_hourly_counts`
+WHERE eval_hour >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
+ORDER BY eval_hour DESC, category;
+```
+
+**Failure drill-down:**
+```sql
+SELECT session_id, category, justification, created_at
+FROM `my-project.agent_analytics.categorical_results_latest`
+WHERE metric_name = 'outcome' AND category = 'escalated'
+ORDER BY created_at DESC
+LIMIT 50;
+```
+
+**Operational health — alert if parse error rate > 10%:**
+```sql
+SELECT eval_date, execution_mode, parse_error_rate, fallback_rate
+FROM `my-project.agent_analytics.categorical_operational_metrics`
+WHERE parse_error_rate > 0.10
+ORDER BY eval_date DESC;
+```
+
+**Prompt version A/B comparison:**
+```sql
+SELECT prompt_version, category,
+       COUNT(*) AS cnt,
+       SAFE_DIVIDE(COUNT(*), SUM(COUNT(*)) OVER (PARTITION BY prompt_version)) AS pct
+FROM `my-project.agent_analytics.categorical_results_latest`
+WHERE metric_name = 'tone'
+GROUP BY 1, 2
+ORDER BY prompt_version, category;
+```
+
+See [`examples/categorical_dashboard.sql`](examples/categorical_dashboard.sql) for the full annotated query set including rolling-average spike detection and alerting patterns.
+
+---
+
+## 18. Context Graph (Property Graph for Agentic Ads)
 
 The **Context Graph** module builds a BigQuery Property Graph that cross-links technical execution traces (TechNodes) with business-domain entities (BizNodes). It enables GQL-based trace reconstruction, causal reasoning, and world-change detection for long-running agent tasks.
 
@@ -1424,7 +1635,7 @@ WorldChangeAlert (Pydantic)
 
 ---
 
-## 18. CLI (`bq-agent-sdk`)
+## 19. CLI (`bq-agent-sdk`)
 
 The SDK ships a command-line interface for diagnostics, evaluation, and
 analytics — useful in CI/CD pipelines, ad-hoc debugging, and agent
@@ -1447,7 +1658,7 @@ Every command accepts:
 | `--project-id` | `BQ_AGENT_PROJECT` | *required* | GCP project ID |
 | `--dataset-id` | `BQ_AGENT_DATASET` | *required* | BigQuery dataset |
 | `--table-id` | | `agent_events` | Events table name |
-| `--location` | | `us-central1` | BQ location |
+| `--location` | | *auto* | BQ location (omit for auto-detect) |
 | `--format` | | `json` | Output format: `json\|text\|table` |
 
 ### Commands
@@ -1523,6 +1734,32 @@ bq-agent-sdk list-traces --project-id=P --dataset-id=D \
   --agent-id=bot --last=1h --limit=10
 ```
 
+#### `categorical-eval` — Categorical Evaluation
+
+```bash
+# Batch evaluation with persistence
+bq-agent-sdk categorical-eval --project-id=P --dataset-id=D \
+  --metrics-file=metrics.json --last=24h --persist --prompt-version=v1
+
+# Quick check without persistence
+bq-agent-sdk categorical-eval --project-id=P --dataset-id=D \
+  --metrics-file=metrics.json --limit=10
+
+# Real-time micro-batch (run every 5 minutes via cron)
+bq-agent-sdk categorical-eval --project-id=P --dataset-id=D \
+  --metrics-file=metrics.json --last=5m --persist --prompt-version=v2
+```
+
+#### `categorical-views` — Create Dashboard Views
+
+```bash
+# Create all 4 dashboard views (dedup base + aggregations)
+bq-agent-sdk categorical-views --project-id=P --dataset-id=D
+
+# With custom prefix
+bq-agent-sdk categorical-views --project-id=P --dataset-id=D --prefix=adk_
+```
+
 #### `views create-all` — Create Event Views
 
 ```bash
@@ -1545,7 +1782,7 @@ bq-agent-sdk views create LLM_REQUEST --project-id=P --dataset-id=D
 
 ---
 
-## 19. Remote Function (BigQuery SQL Interface)
+## 20. Remote Function (BigQuery SQL Interface)
 
 Deploy the SDK as a BigQuery Remote Function to call analytics
 operations directly from SQL.
@@ -1632,7 +1869,7 @@ The function reads config from `userDefinedContext` (set via
 
 ---
 
-## 20. Continuous Queries (Real-Time Streaming)
+## 21. Continuous Queries (Real-Time Streaming)
 
 Pre-built SQL templates for BigQuery continuous queries that process
 agent events in real time as they arrive.
@@ -1706,6 +1943,10 @@ bigquery_agent_analytics/
 │   ├── formatter.py           ← Output formatting (json/text/table)
 │   └── serialization.py       ← Uniform serialization layer
 │
+│   Categorical Evaluation
+│   ├── categorical_evaluator.py ← Metric definitions, AI.GENERATE + Gemini fallback
+│   └── categorical_views.py     ← Dashboard views (dedup + aggregations)
+│
 │   Utilities
 │   ├── event_semantics.py     ← Canonical event type helpers & predicates
 │   └── views.py               ← Per-event-type BigQuery view management
@@ -1728,6 +1969,8 @@ Standalone modules (no internal imports):
 ├── context_graph.py
 ├── event_semantics.py
 ├── views.py
+├── categorical_evaluator.py
+├── categorical_views.py
 └── eval_suite.py
 
 Modules with internal imports:
@@ -1735,7 +1978,8 @@ Modules with internal imports:
 ├── grader_pipeline.py  → evaluators
 ├── multi_trial.py      → trace_evaluator
 ├── eval_validator.py   → eval_suite
-└── client.py           → evaluators, feedback, insights, trace, context_graph
+├── categorical_views.py → categorical_evaluator (DEFAULT_RESULTS_TABLE)
+└── client.py           → evaluators, feedback, insights, trace, context_graph, categorical_*
 
 External dependency:
 └── memory_service.py   → google-adk (memory + sessions)
