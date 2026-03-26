@@ -94,10 +94,10 @@ SELECT
   endpoint,
   COUNTIF(parse_error) AS parse_errors,
   COUNTIF(NOT passed_validation AND NOT parse_error) AS validation_failures,
-  COUNTIF(execution_mode = 'gemini_api') AS fallback_count,
+  COUNTIF(execution_mode = 'api_fallback') AS fallback_count,
   COUNT(*) AS total,
   SAFE_DIVIDE(COUNTIF(parse_error), COUNT(*)) AS parse_error_rate,
-  SAFE_DIVIDE(COUNTIF(execution_mode = 'gemini_api'), COUNT(*)) AS fallback_rate
+  SAFE_DIVIDE(COUNTIF(execution_mode = 'api_fallback'), COUNT(*)) AS fallback_rate
 FROM `{project}.{dataset}.{prefix}categorical_results_latest`
 GROUP BY 1, 2, 3
 """,

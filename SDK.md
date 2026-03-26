@@ -1296,7 +1296,7 @@ config = CategoricalEvaluationConfig(
 
 report = client.evaluate_categorical(
     config=config,
-    filters=TraceFilter(last="24h"),
+    filters=TraceFilter.from_cli_args(last="24h"),
 )
 
 print(report.category_distributions)
