@@ -443,6 +443,23 @@ except ImportError as e:
       e,
   )
 
+# Ontology Orchestrator
+try:
+  from .ontology_orchestrator import build_ontology_graph
+  from .ontology_orchestrator import compile_showcase_gql
+
+  __all__.extend(
+      [
+          "build_ontology_graph",
+          "compile_showcase_gql",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import ontology orchestrator: %s.",
+      e,
+  )
+
 # BigFrames Evaluator (optional bigframes dependency)
 try:
   from .bigframes_evaluator import BigFramesEvaluator
