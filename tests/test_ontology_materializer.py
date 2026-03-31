@@ -316,6 +316,8 @@ class TestRouteNode:
     assert row["alpha_id"] == "a1"
     assert row["score"] == 0.9
     assert row["session_id"] == "sess1"
+    assert "extracted_at" in row
+    assert row["extracted_at"]  # non-empty ISO string
 
 
 # ------------------------------------------------------------------ #
@@ -342,6 +344,7 @@ class TestRouteEdge:
     assert row["beta_id"] == "b1"
     assert row["weight"] == 0.75
     assert row["session_id"] == "sess1"
+    assert "extracted_at" in row
 
   def test_composite_key_routing(self):
     entity = _make_entity(
@@ -376,6 +379,72 @@ class TestRouteEdge:
     assert row["k1"] == "abc"
     assert row["k2"] == "42"
     assert row["eid"] == "o1"
+
+  def test_subset_binding_columns(self):
+    """from_columns can be a subset of the source entity's primary keys."""
+    entity = _make_entity(
+        "Multi",
+        props=[
+            PropertySpec(name="k1", type="string"),
+            PropertySpec(name="k2", type="int64"),
+        ],
+        keys=["k1", "k2"],
+        source="p.d.multi",
+    )
+    other = _make_entity("Other", source="p.d.other")
+    # Relationship only binds on k2, not the full composite key.
+    rel = RelationshipSpec(
+        name="R",
+        from_entity="Multi",
+        to_entity="Other",
+        binding=BindingSpec(
+            source="p.d.edges",
+            from_columns=["k2"],
+            to_columns=["eid"],
+        ),
+    )
+    spec = GraphSpec(name="g", entities=[entity, other], relationships=[rel])
+    edge = ExtractedEdge(
+        edge_id="sess1:R:0",
+        relationship_name="R",
+        from_node_id="sess1:Multi:k1=abc,k2=42",
+        to_node_id="sess1:Other:eid=o1",
+        properties=[],
+    )
+    row = _route_edge(edge, rel, spec, "sess1")
+    # Only k2 should be in the row from from_columns, not k1.
+    assert row["k2"] == "42"
+    assert "k1" not in row
+    assert row["eid"] == "o1"
+
+  def test_subset_binding_ddl_only_emits_bound_columns(self):
+    """DDL should only include the binding columns, not all entity PKs."""
+    entity = _make_entity(
+        "Multi",
+        props=[
+            PropertySpec(name="k1", type="string"),
+            PropertySpec(name="k2", type="int64"),
+        ],
+        keys=["k1", "k2"],
+        source="p.d.multi",
+    )
+    other = _make_entity("Other", source="p.d.other")
+    rel = RelationshipSpec(
+        name="R",
+        from_entity="Multi",
+        to_entity="Other",
+        binding=BindingSpec(
+            source="p.d.edges",
+            from_columns=["k2"],
+            to_columns=["eid"],
+        ),
+    )
+    spec = GraphSpec(name="g", entities=[entity, other], relationships=[rel])
+    ddl = compile_relationship_ddl(rel, spec, "proj", "ds")
+    # Only k2 from from_columns, not k1.
+    assert "k2 INT64" in ddl
+    assert "k1" not in ddl
+    assert "eid STRING" in ddl
 
 
 # ------------------------------------------------------------------ #

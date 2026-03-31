@@ -47,6 +47,7 @@ Example usage::
 
 from __future__ import annotations
 
+import datetime
 import logging
 from typing import Optional
 
@@ -140,17 +141,31 @@ def compile_relationship_ddl(
   tgt_prop_map = {p.name: p for p in tgt.properties}
 
   cols = []
-  # From-entity key columns.
-  for col in src.keys.primary:
-    prop = src_prop_map[col]
-    cols.append(f"  {col} {_ddl_type(prop.type)}")
-  # To-entity key columns (skip if already added via from-keys).
-  seen = set(src.keys.primary)
-  for col in tgt.keys.primary:
-    if col not in seen:
-      prop = tgt_prop_map[col]
+  seen: set[str] = set()
+  # From-entity columns from the binding (subset of source PK).
+  if rel.binding.from_columns:
+    for col in rel.binding.from_columns:
+      prop = src_prop_map[col]
       cols.append(f"  {col} {_ddl_type(prop.type)}")
       seen.add(col)
+  else:
+    for col in src.keys.primary:
+      prop = src_prop_map[col]
+      cols.append(f"  {col} {_ddl_type(prop.type)}")
+      seen.add(col)
+  # To-entity columns from the binding (subset of target PK).
+  if rel.binding.to_columns:
+    for col in rel.binding.to_columns:
+      if col not in seen:
+        prop = tgt_prop_map[col]
+        cols.append(f"  {col} {_ddl_type(prop.type)}")
+        seen.add(col)
+  else:
+    for col in tgt.keys.primary:
+      if col not in seen:
+        prop = tgt_prop_map[col]
+        cols.append(f"  {col} {_ddl_type(prop.type)}")
+        seen.add(col)
   # Relationship properties.
   for prop in rel.properties:
     if prop.name not in seen:
@@ -183,6 +198,7 @@ def _route_node(
   for prop in node.properties:
     row[prop.name] = prop.value
   row["session_id"] = session_id
+  row["extracted_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
   return row
 
 
@@ -219,24 +235,23 @@ def _route_edge(
   and ``to_node_id`` key segments, mapped through the relationship's
   ``from_columns``/``to_columns`` binding.
   """
-  entity_map = {e.name: e for e in spec.entities}
   row: dict = {}
 
-  # Map from-entity keys.
+  # Map from-entity keys.  from_columns are a subset of the source
+  # entity's primary keys, so the column names match the key names
+  # in the parsed node ID segment.
   from_keys = _parse_key_segment(edge.from_node_id)
-  src = entity_map[rel.from_entity]
   if rel.binding.from_columns:
-    for fk_col, pk_col in zip(rel.binding.from_columns, src.keys.primary):
-      row[fk_col] = from_keys.get(pk_col, "")
+    for col in rel.binding.from_columns:
+      row[col] = from_keys.get(col, "")
   else:
     row.update(from_keys)
 
-  # Map to-entity keys.
+  # Map to-entity keys (same logic).
   to_keys = _parse_key_segment(edge.to_node_id)
-  tgt = entity_map[rel.to_entity]
   if rel.binding.to_columns:
-    for fk_col, pk_col in zip(rel.binding.to_columns, tgt.keys.primary):
-      row[fk_col] = to_keys.get(pk_col, "")
+    for col in rel.binding.to_columns:
+      row[col] = to_keys.get(col, "")
   else:
     row.update(to_keys)
 
@@ -245,6 +260,7 @@ def _route_edge(
     row[prop.name] = prop.value
 
   row["session_id"] = session_id
+  row["extracted_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
   return row
 
 
