@@ -17,6 +17,7 @@
 from datetime import datetime
 from datetime import timezone
 import json
+import os
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -1422,6 +1423,99 @@ class TestCategoricalViews:
             "categorical-views",
             "--project-id=proj",
             "--dataset-id=ds",
+        ],
+    )
+    assert result.exit_code == 2
+
+
+class TestOntologyPropertyGraph:
+
+  _SPEC_PATH = os.path.join(
+      os.path.dirname(__file__),
+      "..",
+      "examples",
+      "ymgo_graph_spec.yaml",
+  )
+
+  def test_sql_output(self):
+    result = runner.invoke(
+        app,
+        [
+            "ontology-property-graph",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            f"--spec-path={self._SPEC_PATH}",
+            "--env=p.d",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "CREATE OR REPLACE PROPERTY GRAPH" in result.output
+    assert "NODE TABLES" in result.output
+    assert "EDGE TABLES" in result.output
+
+  def test_custom_graph_name(self):
+    result = runner.invoke(
+        app,
+        [
+            "ontology-property-graph",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            f"--spec-path={self._SPEC_PATH}",
+            "--env=p.d",
+            "--graph-name=my_custom_graph",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "my_custom_graph" in result.output
+
+  def test_json_output(self):
+    result = runner.invoke(
+        app,
+        [
+            "ontology-property-graph",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            f"--spec-path={self._SPEC_PATH}",
+            "--env=p.d",
+            "--format=json",
+        ],
+    )
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert "ddl" in parsed
+    assert "graph_name" in parsed
+
+  @patch(
+      "bigquery_agent_analytics.ontology_property_graph"
+      ".OntologyPropertyGraphCompiler.create_property_graph"
+  )
+  def test_execute_flag(self, mock_create):
+    mock_create.return_value = True
+
+    result = runner.invoke(
+        app,
+        [
+            "ontology-property-graph",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            f"--spec-path={self._SPEC_PATH}",
+            "--env=p.d",
+            "--execute",
+        ],
+    )
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["success"] is True
+    mock_create.assert_called_once()
+
+  def test_bad_spec_path_exit_2(self):
+    result = runner.invoke(
+        app,
+        [
+            "ontology-property-graph",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--spec-path=/nonexistent/path.yaml",
         ],
     )
     assert result.exit_code == 2

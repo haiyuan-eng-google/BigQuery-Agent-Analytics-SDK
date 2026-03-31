@@ -426,6 +426,23 @@ except ImportError as e:
       e,
   )
 
+# Ontology Property Graph Compiler
+try:
+  from .ontology_property_graph import compile_property_graph_ddl
+  from .ontology_property_graph import OntologyPropertyGraphCompiler
+
+  __all__.extend(
+      [
+          "OntologyPropertyGraphCompiler",
+          "compile_property_graph_ddl",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import ontology property graph compiler: %s.",
+      e,
+  )
+
 # BigFrames Evaluator (optional bigframes dependency)
 try:
   from .bigframes_evaluator import BigFramesEvaluator

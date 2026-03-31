@@ -677,6 +677,71 @@ def categorical_views(
 
 
 # ------------------------------------------------------------------ #
+# ontology-property-graph                                              #
+# ------------------------------------------------------------------ #
+
+
+@app.command("ontology-property-graph")
+def ontology_property_graph(
+    project_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_PROJECT", help=_PROJECT_HELP
+    ),
+    dataset_id: str = typer.Option(
+        ..., envvar="BQ_AGENT_DATASET", help=_DATASET_HELP
+    ),
+    spec_path: str = typer.Option(..., help="Path to YAML graph spec file."),
+    env: Optional[str] = typer.Option(
+        None, help="Value for {{ env }} placeholder in binding.source."
+    ),
+    graph_name: Optional[str] = typer.Option(
+        None, help="Override the property graph name."
+    ),
+    execute: bool = typer.Option(
+        False, help="Execute the DDL against BigQuery."
+    ),
+    fmt: str = typer.Option(
+        "sql",
+        "--format",
+        help="Output format: sql|json.",
+    ),
+) -> None:
+  """Generate or create a Property Graph from an ontology YAML spec."""
+  try:
+    from .ontology_models import load_graph_spec
+    from .ontology_property_graph import OntologyPropertyGraphCompiler
+
+    spec = load_graph_spec(spec_path, env=env)
+    compiler = OntologyPropertyGraphCompiler(
+        project_id=project_id,
+        dataset_id=dataset_id,
+        spec=spec,
+    )
+    ddl = compiler.get_ddl(graph_name=graph_name)
+
+    if execute:
+      success = compiler.create_property_graph(graph_name=graph_name)
+      result = {
+          "graph_name": graph_name or spec.name,
+          "graph_ref": f"{project_id}.{dataset_id}.{graph_name or spec.name}",
+          "success": success,
+          "ddl": ddl,
+      }
+      typer.echo(format_output(result, fmt if fmt != "sql" else "json"))
+    else:
+      if fmt == "sql":
+        typer.echo(ddl)
+      else:
+        result = {
+            "graph_name": graph_name or spec.name,
+            "ddl": ddl,
+        }
+        typer.echo(format_output(result, fmt))
+  except Exception as exc:
+    typer.echo(f"Error: {exc}", err=True)
+    raise typer.Exit(code=2)
+
+
+# ------------------------------------------------------------------ #
 # views sub-commands                                                   #
 # ------------------------------------------------------------------ #
 
