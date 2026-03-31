@@ -533,6 +533,48 @@ class TestGetDdl:
     assert "AlphaToBeta" in all_ddl
     assert len(all_ddl) == 3
 
+  def test_get_ddl_shared_source_returns_merged(self):
+    """get_all_ddl / get_entity_ddl return merged schema for shared tables."""
+    shared_table = "p.d.shared_table"
+    alpha = _make_entity(
+        "Alpha",
+        props=[
+            PropertySpec(name="alpha_id", type="string"),
+            PropertySpec(name="kind", type="string"),
+        ],
+        keys=["alpha_id"],
+        source=shared_table,
+    )
+    beta = _make_entity(
+        "Beta",
+        props=[
+            PropertySpec(name="beta_id", type="string"),
+            PropertySpec(name="status", type="int64"),
+        ],
+        keys=["beta_id"],
+        source=shared_table,
+    )
+    spec = GraphSpec(name="shared", entities=[alpha, beta], relationships=[])
+    mat = OntologyMaterializer(
+        project_id="proj",
+        dataset_id="ds",
+        spec=spec,
+        bq_client=_mock_bq_client(),
+    )
+
+    # get_all_ddl: both names return the same merged DDL.
+    all_ddl = mat.get_all_ddl()
+    assert all_ddl["Alpha"] == all_ddl["Beta"]
+    merged = all_ddl["Alpha"]
+    assert "alpha_id STRING" in merged
+    assert "beta_id STRING" in merged
+    assert "kind STRING" in merged
+    assert "status INT64" in merged
+
+    # get_entity_ddl: each name also returns the merged DDL.
+    assert mat.get_entity_ddl("Alpha") == merged
+    assert mat.get_entity_ddl("Beta") == merged
+
 
 class TestCreateTables:
 

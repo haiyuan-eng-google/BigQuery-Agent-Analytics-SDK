@@ -338,60 +338,20 @@ class OntologyMaterializer:
 
   # ---- DDL --------------------------------------------------------
 
-  def get_entity_ddl(self, entity_name: str) -> str:
-    """Return the CREATE TABLE DDL for a single entity."""
-    entity_map = {e.name: e for e in self.spec.entities}
-    if entity_name not in entity_map:
-      raise ValueError(
-          f"Entity {entity_name!r} not found in spec. "
-          f"Available: {sorted(entity_map.keys())}."
-      )
-    return compile_entity_ddl(
-        entity_map[entity_name], self.project_id, self.dataset_id
-    )
-
-  def get_relationship_ddl(self, rel_name: str) -> str:
-    """Return the CREATE TABLE DDL for a single relationship."""
-    rel_map = {r.name: r for r in self.spec.relationships}
-    if rel_name not in rel_map:
-      raise ValueError(
-          f"Relationship {rel_name!r} not found in spec. "
-          f"Available: {sorted(rel_map.keys())}."
-      )
-    return compile_relationship_ddl(
-        rel_map[rel_name], self.spec, self.project_id, self.dataset_id
-    )
-
-  def get_all_ddl(self) -> dict[str, str]:
-    """Return DDL for all entities and relationships.
+  def _merged_table_ddl(
+      self,
+  ) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """Merge columns per physical table across all spec entries.
 
     Returns:
-        Dict mapping ``{entity_or_rel_name}`` → DDL string.
+        A tuple of ``(table_ddl, table_names)`` where
+        ``table_ddl`` maps ``table_ref → CREATE TABLE DDL`` and
+        ``table_names`` maps ``table_ref → [spec entry names]``.
+
+    Raises:
+        ValueError: If two entries define the same column name with
+            different types on a shared table.
     """
-    result = {}
-    for entity in self.spec.entities:
-      result[entity.name] = compile_entity_ddl(
-          entity, self.project_id, self.dataset_id
-      )
-    for rel in self.spec.relationships:
-      result[rel.name] = compile_relationship_ddl(
-          rel, self.spec, self.project_id, self.dataset_id
-      )
-    return result
-
-  def create_tables(self) -> dict[str, str]:
-    """Execute DDL to create all entity and relationship tables.
-
-    When multiple spec entries share the same ``binding.source``,
-    their columns are merged into a single ``CREATE TABLE`` DDL so
-    that the physical table contains the union of all required
-    columns.  A ``ValueError`` is raised if two entries define the
-    same column name with different types.
-
-    Returns:
-        Dict mapping ``{name}`` → table reference for created tables.
-    """
-    # Collect merged columns per physical table.
     table_columns: dict[str, dict[str, str]] = {}
     table_names: dict[str, list[str]] = {}
 
@@ -407,10 +367,70 @@ class OntologyMaterializer:
       _merge_columns(merged, _relationship_columns(rel, self.spec), table_ref)
       table_names.setdefault(table_ref, []).append(rel.name)
 
-    # Execute one CREATE TABLE per physical table.
+    table_ddl = {
+        ref: _columns_to_ddl(ref, cols) for ref, cols in table_columns.items()
+    }
+    return table_ddl, table_names
+
+  # ---- DDL (public) ------------------------------------------------
+
+  def get_entity_ddl(self, entity_name: str) -> str:
+    """Return the merged CREATE TABLE DDL for the entity's physical table."""
+    entity_map = {e.name: e for e in self.spec.entities}
+    if entity_name not in entity_map:
+      raise ValueError(
+          f"Entity {entity_name!r} not found in spec. "
+          f"Available: {sorted(entity_map.keys())}."
+      )
+    table_ref = self._table_ref(entity_map[entity_name].binding.source)
+    table_ddl, _ = self._merged_table_ddl()
+    return table_ddl[table_ref]
+
+  def get_relationship_ddl(self, rel_name: str) -> str:
+    """Return the merged CREATE TABLE DDL for the relationship's physical table."""
+    rel_map = {r.name: r for r in self.spec.relationships}
+    if rel_name not in rel_map:
+      raise ValueError(
+          f"Relationship {rel_name!r} not found in spec. "
+          f"Available: {sorted(rel_map.keys())}."
+      )
+    table_ref = self._table_ref(rel_map[rel_name].binding.source)
+    table_ddl, _ = self._merged_table_ddl()
+    return table_ddl[table_ref]
+
+  def get_all_ddl(self) -> dict[str, str]:
+    """Return merged DDL for all physical tables.
+
+    When multiple spec entries share the same ``binding.source``,
+    the DDL contains the union of all columns.  Each entry name
+    maps to the merged DDL for its physical table.
+
+    Returns:
+        Dict mapping ``{entity_or_rel_name}`` → DDL string.
+    """
+    table_ddl, table_names = self._merged_table_ddl()
+    result = {}
+    for table_ref, names in table_names.items():
+      for name in names:
+        result[name] = table_ddl[table_ref]
+    return result
+
+  def create_tables(self) -> dict[str, str]:
+    """Execute DDL to create all entity and relationship tables.
+
+    When multiple spec entries share the same ``binding.source``,
+    their columns are merged into a single ``CREATE TABLE`` DDL so
+    that the physical table contains the union of all required
+    columns.  A ``ValueError`` is raised if two entries define the
+    same column name with different types.
+
+    Returns:
+        Dict mapping ``{name}`` → table reference for created tables.
+    """
+    table_ddl, table_names = self._merged_table_ddl()
+
     created = {}
-    for table_ref, columns in table_columns.items():
-      ddl = _columns_to_ddl(table_ref, columns)
+    for table_ref, ddl in table_ddl.items():
       try:
         job = self.bq_client.query(ddl)
         job.result()
