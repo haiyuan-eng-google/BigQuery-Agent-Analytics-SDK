@@ -42,6 +42,7 @@ import re
 from typing import Any, Optional
 
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 import yaml
 
@@ -55,6 +56,8 @@ logger = logging.getLogger("bigquery_agent_analytics." + __name__)
 class PropertySpec(BaseModel):
   """Single property definition within an entity or relationship."""
 
+  model_config = ConfigDict(extra="forbid")
+
   name: str = Field(description="Property name.")
   type: str = Field(description="Property type (string, int64, double, etc.).")
   description: str = Field(
@@ -65,11 +68,15 @@ class PropertySpec(BaseModel):
 class KeySpec(BaseModel):
   """Primary key specification for an entity."""
 
-  primary: list[str] = Field(description="Primary key column(s).")
+  model_config = ConfigDict(extra="forbid")
+
+  primary: list[str] = Field(description="Primary key column(s).", min_length=1)
 
 
 class BindingSpec(BaseModel):
   """Physical BigQuery table binding."""
+
+  model_config = ConfigDict(extra="forbid")
 
   source: str = Field(
       description="BigQuery table reference, may contain {{ env }}."
@@ -86,6 +93,8 @@ class BindingSpec(BaseModel):
 
 class EntitySpec(BaseModel):
   """Node type definition in the ontology."""
+
+  model_config = ConfigDict(extra="forbid")
 
   name: str = Field(description="Entity name (becomes node label).")
   description: str = Field(default="", description="Entity description.")
@@ -107,6 +116,8 @@ class EntitySpec(BaseModel):
 class RelationshipSpec(BaseModel):
   """Edge type definition in the ontology."""
 
+  model_config = ConfigDict(extra="forbid")
+
   name: str = Field(description="Relationship type name.")
   description: str = Field(default="", description="Relationship description.")
   from_entity: str = Field(description="Source entity name.")
@@ -121,6 +132,8 @@ class RelationshipSpec(BaseModel):
 
 class GraphSpec(BaseModel):
   """Top-level ontology graph specification parsed from YAML."""
+
+  model_config = ConfigDict(extra="forbid")
 
   name: str = Field(description="Graph name.")
   entities: list[EntitySpec] = Field(
@@ -209,6 +222,9 @@ def _validate_graph_spec(spec: GraphSpec) -> None:
           - Duplicate relationship names
           - Key columns not found in entity properties
           - Relationship ``from_entity`` or ``to_entity`` not in entities
+          - Empty primary key list
+          - Relationship ``from_columns`` and ``to_columns`` not both
+            present, or mismatched lengths
           - Relationship ``from_columns`` not a subset of source entity
             primary keys
           - Relationship ``to_columns`` not a subset of target entity
@@ -255,8 +271,23 @@ def _validate_graph_spec(spec: GraphSpec) -> None:
           f"{rel.to_entity!r} is not a defined entity."
       )
 
-    # Join column validation.
-    if rel.binding.from_columns is not None:
+    # Join column validation: both sides required together.
+    has_from = rel.binding.from_columns is not None
+    has_to = rel.binding.to_columns is not None
+    if has_from != has_to:
+      raise ValueError(
+          f"Relationship {rel.name!r}: from_columns and to_columns "
+          f"must both be present or both be absent."
+      )
+
+    if has_from and has_to:
+      if len(rel.binding.from_columns) != len(rel.binding.to_columns):
+        raise ValueError(
+            f"Relationship {rel.name!r}: from_columns length "
+            f"({len(rel.binding.from_columns)}) != to_columns length "
+            f"({len(rel.binding.to_columns)})."
+        )
+
       source_keys = set(entity_map[rel.from_entity].keys.primary)
       for col in rel.binding.from_columns:
         if col not in source_keys:
@@ -266,7 +297,6 @@ def _validate_graph_spec(spec: GraphSpec) -> None:
               f"primary keys {sorted(source_keys)}."
           )
 
-    if rel.binding.to_columns is not None:
       target_keys = set(entity_map[rel.to_entity].keys.primary)
       for col in rel.binding.to_columns:
         if col not in target_keys:

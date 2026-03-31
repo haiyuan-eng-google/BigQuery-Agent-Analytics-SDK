@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import textwrap
 
+from pydantic import ValidationError
 import pytest
 
 from bigquery_agent_analytics.ontology_models import _resolve_inheritance
@@ -407,6 +408,130 @@ class TestValidateGraphSpec:
     _resolve_inheritance(spec)
     with pytest.raises(ValueError, match="Duplicate relationship name.*Dup"):
       _validate_graph_spec(spec)
+
+  def test_empty_primary_key_rejected(self):
+    with pytest.raises(ValidationError):
+      KeySpec(primary=[])
+
+  def test_relationship_from_columns_without_to_columns(self):
+    spec = GraphSpec(
+        name="g",
+        entities=[_make_entity(name="A"), _make_entity(name="B")],
+        relationships=[
+            RelationshipSpec(
+                name="R",
+                from_entity="A",
+                to_entity="B",
+                binding=BindingSpec(source="p.d.t", from_columns=["eid"]),
+            ),
+        ],
+    )
+    _resolve_inheritance(spec)
+    with pytest.raises(ValueError, match="both be present or both be absent"):
+      _validate_graph_spec(spec)
+
+  def test_relationship_to_columns_without_from_columns(self):
+    spec = GraphSpec(
+        name="g",
+        entities=[_make_entity(name="A"), _make_entity(name="B")],
+        relationships=[
+            RelationshipSpec(
+                name="R",
+                from_entity="A",
+                to_entity="B",
+                binding=BindingSpec(source="p.d.t", to_columns=["eid"]),
+            ),
+        ],
+    )
+    _resolve_inheritance(spec)
+    with pytest.raises(ValueError, match="both be present or both be absent"):
+      _validate_graph_spec(spec)
+
+  def test_mismatched_join_column_lengths(self):
+    spec = GraphSpec(
+        name="g",
+        entities=[_make_entity(name="A"), _make_entity(name="B")],
+        relationships=[
+            RelationshipSpec(
+                name="R",
+                from_entity="A",
+                to_entity="B",
+                binding=BindingSpec(
+                    source="p.d.t",
+                    from_columns=["eid"],
+                    to_columns=["eid", "eid"],
+                ),
+            ),
+        ],
+    )
+    _resolve_inheritance(spec)
+    with pytest.raises(ValueError, match="from_columns length.*!=.*to_columns"):
+      _validate_graph_spec(spec)
+
+
+# ------------------------------------------------------------------ #
+# extra="forbid" — unknown fields rejected                             #
+# ------------------------------------------------------------------ #
+
+
+class TestExtraForbid:
+
+  def test_unknown_field_on_entity(self):
+    with pytest.raises(ValidationError):
+      EntitySpec(
+          name="E",
+          binding=BindingSpec(source="p.d.t"),
+          keys=KeySpec(primary=["eid"]),
+          properties=[PropertySpec(name="eid", type="string")],
+          bogus_field="oops",
+      )
+
+  def test_unknown_field_on_property(self):
+    with pytest.raises(ValidationError):
+      PropertySpec(name="x", type="string", unknown="bad")
+
+  def test_unknown_field_on_binding(self):
+    with pytest.raises(ValidationError):
+      BindingSpec(source="p.d.t", extra_thing=True)
+
+  def test_unknown_field_on_key(self):
+    with pytest.raises(ValidationError):
+      KeySpec(primary=["k"], secondary=["s"])
+
+  def test_unknown_field_on_relationship(self):
+    with pytest.raises(ValidationError):
+      RelationshipSpec(
+          name="R",
+          from_entity="A",
+          to_entity="B",
+          binding=BindingSpec(source="p.d.t"),
+          weight=0.5,
+      )
+
+  def test_unknown_field_on_graph_spec(self):
+    with pytest.raises(ValidationError):
+      GraphSpec(name="g", version="v2")
+
+  def test_unknown_field_in_yaml_rejected(self):
+    yaml_str = textwrap.dedent(
+        """\
+      graph:
+        name: g
+        entities:
+          - name: T
+            typo_field: oops
+            binding:
+              source: p.d.t
+            keys:
+              primary: [tid]
+            properties:
+              - name: tid
+                type: string
+        relationships: []
+    """
+    )
+    with pytest.raises(ValidationError):
+      load_graph_spec_from_string(yaml_str)
 
 
 # ------------------------------------------------------------------ #
