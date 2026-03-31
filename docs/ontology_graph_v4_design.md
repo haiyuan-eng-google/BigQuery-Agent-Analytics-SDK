@@ -344,7 +344,9 @@ CREATE OR REPLACE PROPERTY GRAPH `project.dataset.YMGO_Context_Graph`
   `build_ontology_graph(session_ids, spec_path, graph_name=None)`
 - GQL showcase query:
   `MATCH (dp:mako_DecisionPoint)-[ce:CandidateEdge]->(ad:sup_YahooAdUnit)`
-- Demo: `examples/ontology_graph_v4_demo.html`
+- Interactive demo: `examples/ontology_graph_v4_demo.html`
+  ([live deployment](https://ontology-v4-deploy.vercel.app))
+- Notebook walkthrough: `examples/ontology_graph_v4_demo.ipynb`
 
 ---
 
