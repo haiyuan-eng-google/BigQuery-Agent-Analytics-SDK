@@ -415,6 +415,17 @@ except ImportError as e:
       e,
   )
 
+# Ontology Materializer
+try:
+  from .ontology_materializer import OntologyMaterializer
+
+  __all__.append("OntologyMaterializer")
+except ImportError as e:
+  logger.debug(
+      "Could not import ontology materializer: %s.",
+      e,
+  )
+
 # BigFrames Evaluator (optional bigframes dependency)
 try:
   from .bigframes_evaluator import BigFramesEvaluator
