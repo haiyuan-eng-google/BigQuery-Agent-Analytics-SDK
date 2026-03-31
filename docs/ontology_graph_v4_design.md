@@ -292,16 +292,16 @@ CREATE OR REPLACE PROPERTY GRAPH `project.dataset.YMGO_Context_Graph`
     `project.dataset.decision_points` AS mako_DecisionPoint
       KEY (decision_id, session_id)
       LABEL mako_DecisionPoint
-      PROPERTIES (decision_type, extracted_at),
+      PROPERTIES (decision_id, decision_type, session_id, extracted_at),
     `project.dataset.yahoo_ad_units` AS sup_YahooAdUnit
       KEY (adUnitId, session_id)
       LABEL sup_YahooAdUnit
       LABEL mako_Candidate
-      PROPERTIES (adUnitName, adUnitSize, adUnitPosition, extracted_at),
+      PROPERTIES (adUnitId, adUnitName, adUnitSize, adUnitPosition, session_id, extracted_at),
     `project.dataset.rejection_reasons` AS mako_RejectionReason
       KEY (rejection_id, session_id)
       LABEL mako_RejectionReason
-      PROPERTIES (rejectionType, rejectionRule, extracted_at)
+      PROPERTIES (rejection_id, rejectionType, rejectionRule, session_id, extracted_at)
   )
   EDGE TABLES (
     `project.dataset.candidate_edges` AS CandidateEdge

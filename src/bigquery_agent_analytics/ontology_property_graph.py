@@ -103,12 +103,12 @@ def compile_node_table_clause(
   # Labels: entity may have multiple from extends (label inheritance).
   label_lines = "\n      ".join(f"LABEL {lbl}" for lbl in entity.labels)
 
-  # Properties: all entity property columns except primary keys,
-  # plus metadata columns.  session_id is now in KEY so only
-  # extracted_at goes into PROPERTIES.
-  key_set = set(entity.keys.primary) | {"session_id"}
-  prop_names = [p.name for p in entity.properties if p.name not in key_set]
-  prop_names.append("extracted_at")
+  # Properties: all entity property columns plus session_id and
+  # extracted_at metadata.  BigQuery Property Graph only exposes
+  # columns listed in PROPERTIES to GQL queries — KEY columns are
+  # NOT automatically queryable, so we include everything here.
+  prop_names = [p.name for p in entity.properties]
+  prop_names.extend(["session_id", "extracted_at"])
   props_str = ",\n        ".join(prop_names)
 
   return (

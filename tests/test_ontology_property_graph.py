@@ -118,10 +118,11 @@ class TestCompileNodeTableClause:
     assert "LABEL Alpha" in clause
     # score is a non-key property.
     assert "score" in clause
-    # Primary key and session_id should NOT be in PROPERTIES.
+    # All columns must appear in PROPERTIES for GQL queryability
+    # (KEY columns are NOT auto-exposed in BQ Property Graph).
     props_section = clause.split("PROPERTIES")[1]
-    assert "alpha_id" not in props_section
-    assert "session_id" not in props_section
+    assert "alpha_id" in props_section
+    assert "session_id" in props_section
     # extracted_at metadata is present.
     assert "extracted_at" in clause
 
@@ -138,12 +139,12 @@ class TestCompileNodeTableClause:
     )
     clause = compile_node_table_clause(entity, "proj", "ds")
     assert "KEY (k1, k2, session_id)" in clause
-    # val should be in PROPERTIES but k1, k2, session_id should not.
+    # All columns must be in PROPERTIES for GQL queryability.
     props_section = clause.split("PROPERTIES")[1]
     assert "val" in props_section
-    assert "k1" not in props_section
-    assert "k2" not in props_section
-    assert "session_id" not in props_section
+    assert "k1" in props_section
+    assert "k2" in props_section
+    assert "session_id" in props_section
 
   def test_multiple_labels(self):
     """Entity with extends gets multiple LABEL lines."""
@@ -192,9 +193,6 @@ class TestCompileEdgeTableClause:
     ) in clause
     assert "LABEL AlphaToBeta" in clause
     assert "weight" in clause
-    # session_id is now in KEY, not in PROPERTIES.
-    props_section = clause.split("PROPERTIES")[1]
-    assert "session_id" not in props_section
     assert "extracted_at" in clause
 
   def test_edge_key_deduplicates_overlapping_columns(self):

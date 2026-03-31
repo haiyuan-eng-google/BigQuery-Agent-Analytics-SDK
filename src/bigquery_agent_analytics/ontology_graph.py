@@ -61,6 +61,16 @@ logger = logging.getLogger("bigquery_agent_analytics." + __name__)
 # SQL Templates                                                        #
 # ------------------------------------------------------------------ #
 
+
+def _escape_sql_literal(value: str) -> str:
+  """Escape a Python string for embedding in a BigQuery SQL single-quoted literal.
+
+  Escapes single quotes (``'`` → ``\\'``) and newlines (``\\n`` → ``\\\\n``)
+  so that the resulting SQL string literal is syntactically valid.
+  """
+  return value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+
+
 _EXTRACT_ONTOLOGY_AI_QUERY = """\
 WITH session_transcripts AS (
   SELECT
@@ -97,8 +107,8 @@ SELECT
           st.transcript
         ),
         endpoint => '{endpoint}',
-        output_schema => '{output_schema}'
-      ).result,
+        output_schema => 'graph_json STRING'
+      ).graph_json,
       r'^```(?:json)?\\s*', ''),
     r'\\s*```$', '')
   AS graph_json
@@ -394,11 +404,11 @@ class OntologyGraphManager:
         The formatted SQL string.
     """
     prompt = compile_extraction_prompt(self.spec)
-    output_schema = compile_output_schema(self.spec)
+    schema_hint = compile_output_schema(self.spec)
+    full_prompt = prompt + "\n\nReturn a single JSON object:\n" + schema_hint
     return _EXTRACT_ONTOLOGY_AI_QUERY.format(
-        prompt=prompt.replace("'", "\\'"),
+        prompt=_escape_sql_literal(full_prompt),
         endpoint=self._resolve_endpoint(),
-        output_schema=output_schema.replace("'", "\\'"),
         project=self.project_id,
         dataset=self.dataset_id,
         table=self.table_id,
@@ -426,12 +436,12 @@ class OntologyGraphManager:
   def _extract_via_ai_generate(self, session_ids: list[str]) -> ExtractedGraph:
     """Server-side extraction using AI.GENERATE with output_schema."""
     prompt = compile_extraction_prompt(self.spec)
-    output_schema = compile_output_schema(self.spec)
+    schema_hint = compile_output_schema(self.spec)
+    full_prompt = prompt + "\n\nReturn a single JSON object:\n" + schema_hint
 
     query = _EXTRACT_ONTOLOGY_AI_QUERY.format(
-        prompt=prompt.replace("'", "\\'"),
+        prompt=_escape_sql_literal(full_prompt),
         endpoint=self._resolve_endpoint(),
-        output_schema=output_schema.replace("'", "\\'"),
         project=self.project_id,
         dataset=self.dataset_id,
         table=self.table_id,
