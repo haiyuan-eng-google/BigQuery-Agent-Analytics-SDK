@@ -96,6 +96,68 @@ def _ddl_type(yaml_type: str) -> str:
 # ------------------------------------------------------------------ #
 
 
+def _entity_columns(entity: EntitySpec) -> dict[str, str]:
+  """Return ordered ``{col_name: DDL_TYPE}`` for an entity spec."""
+  cols: dict[str, str] = {}
+  for prop in entity.properties:
+    cols[prop.name] = _ddl_type(prop.type)
+  cols.setdefault("session_id", "STRING")
+  cols.setdefault("extracted_at", "TIMESTAMP")
+  return cols
+
+
+def _relationship_columns(
+    rel: RelationshipSpec,
+    spec: GraphSpec,
+) -> dict[str, str]:
+  """Return ordered ``{col_name: DDL_TYPE}`` for a relationship spec."""
+  entity_map = {e.name: e for e in spec.entities}
+  src = entity_map[rel.from_entity]
+  tgt = entity_map[rel.to_entity]
+  src_prop_map = {p.name: p for p in src.properties}
+  tgt_prop_map = {p.name: p for p in tgt.properties}
+
+  cols: dict[str, str] = {}
+  from_cols = rel.binding.from_columns or src.keys.primary
+  for col in from_cols:
+    cols[col] = _ddl_type(src_prop_map[col].type)
+  to_cols = rel.binding.to_columns or tgt.keys.primary
+  for col in to_cols:
+    if col not in cols:
+      cols[col] = _ddl_type(tgt_prop_map[col].type)
+  for prop in rel.properties:
+    if prop.name not in cols:
+      cols[prop.name] = _ddl_type(prop.type)
+  cols.setdefault("session_id", "STRING")
+  cols.setdefault("extracted_at", "TIMESTAMP")
+  return cols
+
+
+def _merge_columns(
+    existing: dict[str, str],
+    incoming: dict[str, str],
+    table_ref: str,
+) -> None:
+  """Merge *incoming* columns into *existing*, raising on type conflicts."""
+  for name, dtype in incoming.items():
+    if name in existing and existing[name] != dtype:
+      raise ValueError(
+          f"Column type conflict for {name!r} in shared table "
+          f"{table_ref!r}: existing {existing[name]} vs incoming {dtype}."
+      )
+    existing[name] = dtype
+
+
+def _columns_to_ddl(table_ref: str, columns: dict[str, str]) -> str:
+  """Build ``CREATE TABLE IF NOT EXISTS`` DDL from a column dict."""
+  col_defs = [f"  {name} {dtype}" for name, dtype in columns.items()]
+  return (
+      f"CREATE TABLE IF NOT EXISTS `{table_ref}` (\n"
+      + ",\n".join(col_defs)
+      + "\n)"
+  )
+
+
 def compile_entity_ddl(
     entity: EntitySpec,
     project_id: str,
@@ -106,21 +168,13 @@ def compile_entity_ddl(
   Columns: all spec properties + metadata columns
   (``session_id``, ``extracted_at``).
   """
-  cols = []
-  for prop in entity.properties:
-    cols.append(f"  {prop.name} {_ddl_type(prop.type)}")
-  cols.append("  session_id STRING")
-  cols.append("  extracted_at TIMESTAMP")
-
   table_ref = entity.binding.source
   # If binding.source is already fully qualified (3-part), use as-is.
   # Otherwise, prefix with project.dataset.
   if table_ref.count(".") < 2:
     table_ref = f"{project_id}.{dataset_id}.{table_ref}"
 
-  return (
-      f"CREATE TABLE IF NOT EXISTS `{table_ref}` (\n" + ",\n".join(cols) + "\n)"
-  )
+  return _columns_to_ddl(table_ref, _entity_columns(entity))
 
 
 def compile_relationship_ddl(
@@ -134,53 +188,11 @@ def compile_relationship_ddl(
   Columns: from-entity key columns + to-entity key columns +
   relationship properties + metadata.
   """
-  entity_map = {e.name: e for e in spec.entities}
-  src = entity_map[rel.from_entity]
-  tgt = entity_map[rel.to_entity]
-  src_prop_map = {p.name: p for p in src.properties}
-  tgt_prop_map = {p.name: p for p in tgt.properties}
-
-  cols = []
-  seen: set[str] = set()
-  # From-entity columns from the binding (subset of source PK).
-  if rel.binding.from_columns:
-    for col in rel.binding.from_columns:
-      prop = src_prop_map[col]
-      cols.append(f"  {col} {_ddl_type(prop.type)}")
-      seen.add(col)
-  else:
-    for col in src.keys.primary:
-      prop = src_prop_map[col]
-      cols.append(f"  {col} {_ddl_type(prop.type)}")
-      seen.add(col)
-  # To-entity columns from the binding (subset of target PK).
-  if rel.binding.to_columns:
-    for col in rel.binding.to_columns:
-      if col not in seen:
-        prop = tgt_prop_map[col]
-        cols.append(f"  {col} {_ddl_type(prop.type)}")
-        seen.add(col)
-  else:
-    for col in tgt.keys.primary:
-      if col not in seen:
-        prop = tgt_prop_map[col]
-        cols.append(f"  {col} {_ddl_type(prop.type)}")
-        seen.add(col)
-  # Relationship properties.
-  for prop in rel.properties:
-    if prop.name not in seen:
-      cols.append(f"  {prop.name} {_ddl_type(prop.type)}")
-      seen.add(prop.name)
-  cols.append("  session_id STRING")
-  cols.append("  extracted_at TIMESTAMP")
-
   table_ref = rel.binding.source
   if table_ref.count(".") < 2:
     table_ref = f"{project_id}.{dataset_id}.{table_ref}"
 
-  return (
-      f"CREATE TABLE IF NOT EXISTS `{table_ref}` (\n" + ",\n".join(cols) + "\n)"
-  )
+  return _columns_to_ddl(table_ref, _relationship_columns(rel, spec))
 
 
 # ------------------------------------------------------------------ #
@@ -370,37 +382,45 @@ class OntologyMaterializer:
   def create_tables(self) -> dict[str, str]:
     """Execute DDL to create all entity and relationship tables.
 
+    When multiple spec entries share the same ``binding.source``,
+    their columns are merged into a single ``CREATE TABLE`` DDL so
+    that the physical table contains the union of all required
+    columns.  A ``ValueError`` is raised if two entries define the
+    same column name with different types.
+
     Returns:
         Dict mapping ``{name}`` → table reference for created tables.
     """
-    created = {}
+    # Collect merged columns per physical table.
+    table_columns: dict[str, dict[str, str]] = {}
+    table_names: dict[str, list[str]] = {}
+
     for entity in self.spec.entities:
-      ddl = compile_entity_ddl(entity, self.project_id, self.dataset_id)
       table_ref = self._table_ref(entity.binding.source)
-      try:
-        job = self.bq_client.query(ddl)
-        job.result()
-        created[entity.name] = table_ref
-      except Exception as e:
-        logger.warning(
-            "Failed to create table for entity %s: %s",
-            entity.name,
-            e,
-        )
+      merged = table_columns.setdefault(table_ref, {})
+      _merge_columns(merged, _entity_columns(entity), table_ref)
+      table_names.setdefault(table_ref, []).append(entity.name)
 
     for rel in self.spec.relationships:
-      ddl = compile_relationship_ddl(
-          rel, self.spec, self.project_id, self.dataset_id
-      )
       table_ref = self._table_ref(rel.binding.source)
+      merged = table_columns.setdefault(table_ref, {})
+      _merge_columns(merged, _relationship_columns(rel, self.spec), table_ref)
+      table_names.setdefault(table_ref, []).append(rel.name)
+
+    # Execute one CREATE TABLE per physical table.
+    created = {}
+    for table_ref, columns in table_columns.items():
+      ddl = _columns_to_ddl(table_ref, columns)
       try:
         job = self.bq_client.query(ddl)
         job.result()
-        created[rel.name] = table_ref
+        for name in table_names[table_ref]:
+          created[name] = table_ref
       except Exception as e:
         logger.warning(
-            "Failed to create table for relationship %s: %s",
-            rel.name,
+            "Failed to create table %s for %s: %s",
+            table_ref,
+            table_names[table_ref],
             e,
         )
 

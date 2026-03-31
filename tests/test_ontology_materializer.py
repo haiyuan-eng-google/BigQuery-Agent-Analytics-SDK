@@ -577,8 +577,89 @@ class TestCreateTables:
         bq_client=mock_client,
     )
     result = mat.create_tables()
-    # First entity fails, but Beta + AlphaToBeta succeed.
+    # First physical table fails; the other 2 succeed, covering
+    # their respective spec entries.
     assert len(result) == 2
+
+  def test_shared_source_merges_columns(self):
+    """Two entities sharing binding.source get one merged CREATE TABLE."""
+    shared_table = "p.d.shared_table"
+    alpha = _make_entity(
+        "Alpha",
+        props=[
+            PropertySpec(name="alpha_id", type="string"),
+            PropertySpec(name="kind", type="string"),
+        ],
+        keys=["alpha_id"],
+        source=shared_table,
+    )
+    beta = _make_entity(
+        "Beta",
+        props=[
+            PropertySpec(name="beta_id", type="string"),
+            PropertySpec(name="status", type="int64"),
+        ],
+        keys=["beta_id"],
+        source=shared_table,
+    )
+    spec = GraphSpec(name="shared", entities=[alpha, beta], relationships=[])
+
+    mock_client = _mock_bq_client()
+    mock_job = MagicMock()
+    mock_job.result.return_value = None
+    mock_client.query.return_value = mock_job
+
+    mat = OntologyMaterializer(
+        project_id="proj",
+        dataset_id="ds",
+        spec=spec,
+        bq_client=mock_client,
+    )
+    result = mat.create_tables()
+
+    # Both entries point to the same table — only one DDL issued.
+    assert mock_client.query.call_count == 1
+    ddl = mock_client.query.call_args_list[0][0][0]
+    # DDL contains the union of both entities' columns.
+    assert "alpha_id STRING" in ddl
+    assert "kind STRING" in ddl
+    assert "beta_id STRING" in ddl
+    assert "status INT64" in ddl
+    assert "session_id STRING" in ddl
+    # Both names map to the shared table.
+    assert result["Alpha"] == shared_table
+    assert result["Beta"] == shared_table
+
+  def test_shared_source_type_conflict_raises(self):
+    """Same column name with different types across shared table raises."""
+    shared_table = "p.d.conflict"
+    alpha = _make_entity(
+        "Alpha",
+        props=[
+            PropertySpec(name="eid", type="string"),
+            PropertySpec(name="score", type="double"),
+        ],
+        keys=["eid"],
+        source=shared_table,
+    )
+    beta = _make_entity(
+        "Beta",
+        props=[
+            PropertySpec(name="eid", type="int64"),  # conflict: STRING vs INT64
+        ],
+        keys=["eid"],
+        source=shared_table,
+    )
+    spec = GraphSpec(name="conflict", entities=[alpha, beta], relationships=[])
+
+    mat = OntologyMaterializer(
+        project_id="proj",
+        dataset_id="ds",
+        spec=spec,
+        bq_client=_mock_bq_client(),
+    )
+    with pytest.raises(ValueError, match="Column type conflict.*eid"):
+      mat.create_tables()
 
 
 class TestMaterialize:
