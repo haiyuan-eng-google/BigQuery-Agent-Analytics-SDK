@@ -1519,3 +1519,127 @@ class TestOntologyPropertyGraph:
         ],
     )
     assert result.exit_code == 2
+
+
+class TestOntologyShowcaseGql:
+
+  _SPEC_PATH = os.path.join(
+      os.path.dirname(__file__),
+      "..",
+      "examples",
+      "ymgo_graph_spec.yaml",
+  )
+
+  def test_sql_output(self):
+    result = runner.invoke(
+        app,
+        [
+            "ontology-showcase-gql",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            f"--spec-path={self._SPEC_PATH}",
+            "--env=p.d",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "GRAPH" in result.output
+    assert "MATCH" in result.output
+    assert "mako_DecisionPoint" in result.output
+
+  def test_json_output(self):
+    result = runner.invoke(
+        app,
+        [
+            "ontology-showcase-gql",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            f"--spec-path={self._SPEC_PATH}",
+            "--env=p.d",
+            "--format=json",
+        ],
+    )
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert "gql" in parsed
+    assert "graph_name" in parsed
+
+  def test_specific_relationship(self):
+    result = runner.invoke(
+        app,
+        [
+            "ontology-showcase-gql",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            f"--spec-path={self._SPEC_PATH}",
+            "--env=p.d",
+            "--relationship=ForCandidate",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "ForCandidate" in result.output
+
+  def test_bad_spec_path_exit_2(self):
+    result = runner.invoke(
+        app,
+        [
+            "ontology-showcase-gql",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--spec-path=/nonexistent/path.yaml",
+        ],
+    )
+    assert result.exit_code == 2
+
+
+class TestOntologyBuild:
+
+  _SPEC_PATH = os.path.join(
+      os.path.dirname(__file__),
+      "..",
+      "examples",
+      "ymgo_graph_spec.yaml",
+  )
+
+  @patch("bigquery_agent_analytics.ontology_orchestrator.build_ontology_graph")
+  def test_build_command(self, mock_build):
+    from bigquery_agent_analytics.ontology_models import ExtractedGraph
+
+    mock_build.return_value = {
+        "graph_name": "YMGO_Context_Graph_V3",
+        "graph_ref": "proj.ds.YMGO_Context_Graph_V3",
+        "graph": ExtractedGraph(name="test"),
+        "tables_created": {"mako_DecisionPoint": "p.d.decision_points"},
+        "rows_materialized": {"mako_DecisionPoint": 2},
+        "property_graph_created": True,
+        "spec": MagicMock(),
+    }
+
+    result = runner.invoke(
+        app,
+        [
+            "ontology-build",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            f"--spec-path={self._SPEC_PATH}",
+            "--session-ids=sess1,sess2",
+            "--env=p.d",
+        ],
+    )
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["graph_name"] == "YMGO_Context_Graph_V3"
+    assert parsed["property_graph_created"] is True
+    mock_build.assert_called_once()
+
+  def test_bad_spec_path_exit_2(self):
+    result = runner.invoke(
+        app,
+        [
+            "ontology-build",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            "--spec-path=/nonexistent/path.yaml",
+            "--session-ids=sess1",
+        ],
+    )
+    assert result.exit_code == 2
