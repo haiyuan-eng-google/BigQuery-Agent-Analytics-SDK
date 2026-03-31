@@ -95,16 +95,20 @@ def compile_node_table_clause(
             PROPERTIES (col1, col2, session_id, extracted_at)
   """
   table_ref = _resolve_table_ref(entity.binding.source, project_id, dataset_id)
-  key_cols = ", ".join(entity.keys.primary)
+
+  # Node KEY includes session_id so that the same business entity in
+  # different sessions produces distinct graph nodes.
+  key_cols = ", ".join([*entity.keys.primary, "session_id"])
 
   # Labels: entity may have multiple from extends (label inheritance).
   label_lines = "\n      ".join(f"LABEL {lbl}" for lbl in entity.labels)
 
   # Properties: all entity property columns except primary keys,
-  # plus metadata columns.
-  key_set = set(entity.keys.primary)
+  # plus metadata columns.  session_id is now in KEY so only
+  # extracted_at goes into PROPERTIES.
+  key_set = set(entity.keys.primary) | {"session_id"}
   prop_names = [p.name for p in entity.properties if p.name not in key_set]
-  prop_names.extend(["session_id", "extracted_at"])
+  prop_names.append("extracted_at")
   props_str = ",\n        ".join(prop_names)
 
   return (
@@ -184,26 +188,30 @@ def compile_edge_table_clause(
         f"materialization but not for Property Graph compilation."
     )
 
-  # Edge KEY = from_columns + to_columns (deduplicated).
+  # Edge KEY = from_columns + to_columns + session_id (deduplicated).
+  # session_id is part of node KEY, so the edge must carry it for
+  # both SOURCE and DESTINATION references.
   edge_key_cols = list(from_cols)
   for col in to_cols:
     if col not in edge_key_cols:
       edge_key_cols.append(col)
+  if "session_id" not in edge_key_cols:
+    edge_key_cols.append("session_id")
   edge_key_str = ", ".join(edge_key_cols)
 
-  # SOURCE KEY references the from-entity's primary key.
-  src_key_str = ", ".join(from_cols)
-  src_ref_str = ", ".join(src.keys.primary)
+  # SOURCE KEY references the from-entity's node key (PK + session_id).
+  src_key_str = ", ".join([*from_cols, "session_id"])
+  src_ref_str = ", ".join([*src.keys.primary, "session_id"])
 
-  # DESTINATION KEY references the to-entity's primary key.
-  dst_key_str = ", ".join(to_cols)
-  dst_ref_str = ", ".join(tgt.keys.primary)
+  # DESTINATION KEY references the to-entity's node key (PK + session_id).
+  dst_key_str = ", ".join([*to_cols, "session_id"])
+  dst_ref_str = ", ".join([*tgt.keys.primary, "session_id"])
 
   # Properties: relationship-specific properties + metadata.
-  # Exclude columns already in the edge KEY.
+  # Exclude columns already in the edge KEY (session_id is now in KEY).
   key_set = set(edge_key_cols)
   prop_names = [p.name for p in rel.properties if p.name not in key_set]
-  prop_names.extend(["session_id", "extracted_at"])
+  prop_names.append("extracted_at")
   props_str = ",\n        ".join(prop_names)
 
   return (

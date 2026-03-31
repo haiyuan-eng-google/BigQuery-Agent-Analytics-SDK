@@ -1631,6 +1631,33 @@ class TestOntologyBuild:
     assert parsed["property_graph_created"] is True
     mock_build.assert_called_once()
 
+  @patch("bigquery_agent_analytics.ontology_orchestrator.build_ontology_graph")
+  def test_property_graph_failure_exit_1(self, mock_build):
+    from bigquery_agent_analytics.ontology_models import ExtractedGraph
+
+    mock_build.return_value = {
+        "graph_name": "g",
+        "graph_ref": "proj.ds.g",
+        "graph": ExtractedGraph(name="test"),
+        "tables_created": {},
+        "rows_materialized": {},
+        "property_graph_created": False,
+        "spec": MagicMock(),
+    }
+
+    result = runner.invoke(
+        app,
+        [
+            "ontology-build",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            f"--spec-path={self._SPEC_PATH}",
+            "--session-ids=sess1",
+            "--env=p.d",
+        ],
+    )
+    assert result.exit_code == 1
+
   def test_bad_spec_path_exit_2(self):
     result = runner.invoke(
         app,

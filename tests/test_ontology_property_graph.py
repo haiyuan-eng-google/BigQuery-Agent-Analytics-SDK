@@ -113,15 +113,16 @@ class TestCompileNodeTableClause:
     )
     clause = compile_node_table_clause(entity, "proj", "ds")
     assert "`p.d.alpha_table` AS Alpha" in clause
-    assert "KEY (alpha_id)" in clause
+    # session_id is part of the node KEY for multi-session safety.
+    assert "KEY (alpha_id, session_id)" in clause
     assert "LABEL Alpha" in clause
     # score is a non-key property.
     assert "score" in clause
-    # Primary key column should NOT be in PROPERTIES.
+    # Primary key and session_id should NOT be in PROPERTIES.
     props_section = clause.split("PROPERTIES")[1]
     assert "alpha_id" not in props_section
-    # Metadata columns are present.
-    assert "session_id" in clause
+    assert "session_id" not in props_section
+    # extracted_at metadata is present.
     assert "extracted_at" in clause
 
   def test_composite_keys(self):
@@ -136,12 +137,13 @@ class TestCompileNodeTableClause:
         source="p.d.multi",
     )
     clause = compile_node_table_clause(entity, "proj", "ds")
-    assert "KEY (k1, k2)" in clause
-    # val should be in PROPERTIES but k1, k2 should not.
+    assert "KEY (k1, k2, session_id)" in clause
+    # val should be in PROPERTIES but k1, k2, session_id should not.
     props_section = clause.split("PROPERTIES")[1]
     assert "val" in props_section
     assert "k1" not in props_section
     assert "k2" not in props_section
+    assert "session_id" not in props_section
 
   def test_multiple_labels(self):
     """Entity with extends gets multiple LABEL lines."""
@@ -179,12 +181,20 @@ class TestCompileEdgeTableClause:
     rel = spec.relationships[0]
     clause = compile_edge_table_clause(rel, spec, "proj", "ds")
     assert "`p.d.alpha_beta_edges` AS AlphaToBeta" in clause
-    assert "KEY (alpha_id, beta_id)" in clause
-    assert "SOURCE KEY (alpha_id) REFERENCES Alpha (alpha_id)" in clause
-    assert "DESTINATION KEY (beta_id) REFERENCES Beta (beta_id)" in clause
+    assert "KEY (alpha_id, beta_id, session_id)" in clause
+    assert (
+        "SOURCE KEY (alpha_id, session_id) "
+        "REFERENCES Alpha (alpha_id, session_id)"
+    ) in clause
+    assert (
+        "DESTINATION KEY (beta_id, session_id) "
+        "REFERENCES Beta (beta_id, session_id)"
+    ) in clause
     assert "LABEL AlphaToBeta" in clause
     assert "weight" in clause
-    assert "session_id" in clause
+    # session_id is now in KEY, not in PROPERTIES.
+    props_section = clause.split("PROPERTIES")[1]
+    assert "session_id" not in props_section
     assert "extracted_at" in clause
 
   def test_edge_key_deduplicates_overlapping_columns(self):
@@ -213,8 +223,8 @@ class TestCompileEdgeTableClause:
     )
     spec = GraphSpec(name="g", entities=[a, b], relationships=[rel])
     clause = compile_edge_table_clause(rel, spec, "proj", "ds")
-    # KEY should not duplicate shared_id.
-    assert "KEY (shared_id)" in clause
+    # KEY should not duplicate shared_id; session_id is appended.
+    assert "KEY (shared_id, session_id)" in clause
 
   def test_composite_foreign_keys(self):
     src = _make_entity(
@@ -239,9 +249,13 @@ class TestCompileEdgeTableClause:
     )
     spec = GraphSpec(name="g", entities=[src, tgt], relationships=[rel])
     clause = compile_edge_table_clause(rel, spec, "proj", "ds")
-    assert "KEY (k1, k2, eid)" in clause
-    assert "SOURCE KEY (k1, k2) REFERENCES Src (k1, k2)" in clause
-    assert "DESTINATION KEY (eid) REFERENCES Tgt (eid)" in clause
+    assert "KEY (k1, k2, eid, session_id)" in clause
+    assert (
+        "SOURCE KEY (k1, k2, session_id) REFERENCES Src (k1, k2, session_id)"
+    ) in clause
+    assert (
+        "DESTINATION KEY (eid, session_id) REFERENCES Tgt (eid, session_id)"
+    ) in clause
 
   def test_default_columns_when_binding_omits(self):
     """When from_columns/to_columns are not set, defaults to entity PKs."""
@@ -265,8 +279,12 @@ class TestCompileEdgeTableClause:
     )
     spec = GraphSpec(name="g", entities=[a, b], relationships=[rel])
     clause = compile_edge_table_clause(rel, spec, "proj", "ds")
-    assert "SOURCE KEY (a_id) REFERENCES A (a_id)" in clause
-    assert "DESTINATION KEY (b_id) REFERENCES B (b_id)" in clause
+    assert (
+        "SOURCE KEY (a_id, session_id) REFERENCES A (a_id, session_id)"
+    ) in clause
+    assert (
+        "DESTINATION KEY (b_id, session_id) REFERENCES B (b_id, session_id)"
+    ) in clause
 
   def test_edge_properties_exclude_key_columns(self):
     """Edge properties should not include columns already in KEY."""
@@ -383,7 +401,9 @@ class TestCompileEdgeTableClause:
     )
     spec = GraphSpec(name="g", entities=[src, tgt], relationships=[rel])
     clause = compile_edge_table_clause(rel, spec, "proj", "ds")
-    assert "SOURCE KEY (k1, k2) REFERENCES Src (k1, k2)" in clause
+    assert (
+        "SOURCE KEY (k1, k2, session_id) " "REFERENCES Src (k1, k2, session_id)"
+    ) in clause
 
 
 # ------------------------------------------------------------------ #
@@ -447,10 +467,10 @@ class TestCompilePropertyGraphDdl:
     # Both relationships.
     assert "AS CandidateEdge" in ddl
     assert "AS ForCandidate" in ddl
-    # FK references.
-    assert "REFERENCES mako_DecisionPoint (decision_id)" in ddl
-    assert "REFERENCES sup_YahooAdUnit (adUnitId)" in ddl
-    assert "REFERENCES mako_RejectionReason (rejection_id)" in ddl
+    # FK references include session_id for multi-session safety.
+    assert "REFERENCES mako_DecisionPoint (decision_id, session_id)" in ddl
+    assert "REFERENCES sup_YahooAdUnit (adUnitId, session_id)" in ddl
+    assert "REFERENCES mako_RejectionReason (rejection_id, session_id)" in ddl
 
   def test_multiple_node_tables_separated_by_commas(self):
     ddl = compile_property_graph_ddl(_simple_spec(), "proj", "ds")
@@ -525,7 +545,7 @@ class TestCompilerGetClauses:
     )
     clause = compiler.get_node_table_clause("Alpha")
     assert "AS Alpha" in clause
-    assert "KEY (alpha_id)" in clause
+    assert "KEY (alpha_id, session_id)" in clause
 
   def test_get_node_table_clause_unknown_raises(self):
     compiler = OntologyPropertyGraphCompiler(

@@ -806,6 +806,17 @@ def ontology_build(
         "property_graph_created": result["property_graph_created"],
     }
     typer.echo(format_output(output, fmt))
+
+    if not result["property_graph_created"]:
+      typer.echo(
+          "Error: Property Graph creation failed. "
+          "Tables and data were materialized but the graph object "
+          "was not created.",
+          err=True,
+      )
+      raise typer.Exit(code=1)
+  except typer.Exit:
+    raise
   except Exception as exc:
     typer.echo(f"Error: {exc}", err=True)
     raise typer.Exit(code=2)
