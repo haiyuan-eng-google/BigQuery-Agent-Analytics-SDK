@@ -404,6 +404,17 @@ except ImportError as e:
       e,
   )
 
+# Ontology Graph Manager
+try:
+  from .ontology_graph import OntologyGraphManager
+
+  __all__.append("OntologyGraphManager")
+except ImportError as e:
+  logger.debug(
+      "Could not import ontology graph manager: %s.",
+      e,
+  )
+
 # BigFrames Evaluator (optional bigframes dependency)
 try:
   from .bigframes_evaluator import BigFramesEvaluator
