@@ -118,72 +118,90 @@ const YMGO_SESSIONS = [
 // YAML Spec Content
 // ============================================================
 
-const YAML_SPEC = `# ymgo_graph_spec.yaml — Ontology Graph V4 Spec
-# Defines entity schemas and relationship bindings for
-# configuration-driven property graph construction.
+const YAML_SPEC = `# YMGO (Yahoo Media Graph Ontology) V3 — Context Graph Specification
+#
+# This YAML defines the ontology for a configuration-driven context graph.
+# Use {{ env }} placeholders for environment-specific table bindings,
+# resolved at load time via load_graph_spec(path, env="project.dataset").
 
-version: "4.0"
-graph_name: ymgo_ad_decisioning
+graph:
+  name: YMGO_Context_Graph_V3
 
-# ── Entity Definitions ──────────────────────────────────
-entities:
-  # Decision Point: an auction or placement decision
-  - name: DecisionPoint
-    table: decision_points
-    keys: [session_id, decision_id]          # composite KEY
-    properties:
-      - decision_id: STRING
-      - decision_type: STRING                # ad_placement_auction
-      - label: STRING
-      - session_id: STRING
-    # binding.source tells the pipeline which raw column
-    # feeds each property during AI.GENERATE extraction
-    binding:
-      source: agent_events.content
-      extract_with: AI.GENERATE
+  # ── Entity Definitions ──────────────────────────────────
+  entities:
+    - name: mako_DecisionPoint
+      description: "The atomic unit of decisioning where an agent evaluates alternatives."
+      binding:
+        source: "{{ env }}.decision_points"
+      keys:
+        primary: [decision_id]
+      properties:
+        - name: decision_id
+          type: string
+        - name: decision_type
+          type: string
 
-  # Yahoo Ad Unit: the candidate ad inventory unit
-  - name: YahooAdUnit
-    table: ad_units
-    keys: [adUnitId]
-    properties:
-      - adUnitId: STRING
-      - adUnitName: STRING
-      - adUnitSize: STRING                   # e.g. "970x250"
-      - adUnitPosition: STRING               # above_fold, right_rail, etc.
-    extends: base_inventory_entity            # inherits shared cols
+    - name: sup_YahooAdUnit
+      extends: mako_Candidate       # label-only inheritance
+      description: "A specific ad slot on a Yahoo property being evaluated as a candidate."
+      binding:
+        source: "{{ env }}.yahoo_ad_units"
+      keys:
+        primary: [adUnitId]
+      properties:
+        - name: adUnitId
+          type: string
+        - name: adUnitName
+          type: string
+        - name: adUnitSize
+          type: string
+          description: "e.g., '300x250', '728x90'"
+        - name: adUnitPosition
+          type: string
+          description: "ATF (above the fold) | BTF (below the fold)"
 
-  # Rejection Reason: why a candidate was dropped
-  - name: RejectionReason
-    table: rejection_reasons
-    keys: [rejection_id]
-    properties:
-      - rejection_id: STRING
-      - rejectionType: STRING                # budget_exceeded, etc.
-      - rejectionRule: STRING                # human-readable rule expr
+    - name: mako_RejectionReason
+      description: "Structured reason why a Candidate was not selected at a DecisionPoint."
+      binding:
+        source: "{{ env }}.rejection_reasons"
+      keys:
+        primary: [rejection_id]
+      properties:
+        - name: rejection_id
+          type: string
+        - name: rejectionType
+          type: string
+          description: "RULE_BASED | MODEL_BASED | TIMEOUT | ERROR"
+        - name: rejectionRule
+          type: string
+          description: "The specific rule or model threshold that caused rejection."
 
-# ── Relationship Definitions ────────────────────────────
-relationships:
-  # CandidateEdge: links DecisionPoint -> YahooAdUnit
-  - name: CandidateEdge
-    source: DecisionPoint
-    destination: YahooAdUnit
-    table: candidate_edges
-    keys: [session_id, decision_id, adUnitId]
-    properties:
-      - edgeType: STRING                     # SELECTED_CANDIDATE | DROPPED_CANDIDATE
-      - mako_scoreValue: FLOAT64             # Mako ranking score
-    labels:
-      - SELECTED_CANDIDATE
-      - DROPPED_CANDIDATE
+  # ── Relationship Definitions ────────────────────────────
+  relationships:
+    - name: CandidateEdge
+      description: "Connects a decision point to the evaluated Yahoo Ad Unit."
+      from_entity: mako_DecisionPoint
+      to_entity: sup_YahooAdUnit
+      binding:
+        source: "{{ env }}.candidate_edges"
+        from_columns: [decision_id]
+        to_columns: [adUnitId]
+      properties:
+        - name: edge_type
+          type: string
+          description: "SELECTED_CANDIDATE or DROPPED_CANDIDATE"
+        - name: mako_scoreValue
+          type: double
+          description: "The confidence or predicted Q-value for this candidate."
 
-  # ForCandidate: links RejectionReason -> YahooAdUnit
-  - name: ForCandidate
-    source: RejectionReason
-    destination: YahooAdUnit
-    table: for_candidate_edges
-    keys: [rejection_id, adUnitId]
-    properties: []                           # no extra properties`;
+    - name: ForCandidate
+      description: "Maps the MAKO rejection rationale directly to the dropped candidate."
+      from_entity: mako_RejectionReason
+      to_entity: sup_YahooAdUnit
+      binding:
+        source: "{{ env }}.rejection_mappings"
+        from_columns: [rejection_id]
+        to_columns: [adUnitId]`;
 
 // ============================================================
 // SQL Templates
@@ -193,41 +211,44 @@ const SQL_BLOCKS = {
   propertyGraphDDL: {
     name: 'Property Graph DDL',
     sql: `-- Property Graph DDL generated from ymgo_graph_spec.yaml
--- session_id is part of composite KEY for session-scoped graphs
-CREATE OR REPLACE PROPERTY GRAPH \`proj.ds.ymgo_ad_decisioning\`
+-- Node KEY includes session_id so same entity in different sessions
+-- produces distinct graph nodes (multi-session safe).
+CREATE OR REPLACE PROPERTY GRAPH \`proj.ds.YMGO_Context_Graph_V3\`
   NODE TABLES (
-    \`proj.ds.decision_points\` AS DecisionPoint
-      KEY (session_id, decision_id)
-      LABEL DecisionPoint
-      PROPERTIES (decision_id, decision_type, label, session_id),
+    \`proj.ds.decision_points\` AS mako_DecisionPoint
+      KEY (decision_id, session_id)
+      LABEL mako_DecisionPoint
+      PROPERTIES (decision_type, extracted_at),
 
-    \`proj.ds.ad_units\` AS YahooAdUnit
-      KEY (adUnitId)
-      LABEL YahooAdUnit
-      PROPERTIES (adUnitId, adUnitName, adUnitSize, adUnitPosition),
+    \`proj.ds.yahoo_ad_units\` AS sup_YahooAdUnit
+      KEY (adUnitId, session_id)
+      LABEL sup_YahooAdUnit
+      LABEL mako_Candidate
+      PROPERTIES (adUnitName, adUnitSize, adUnitPosition, extracted_at),
 
-    \`proj.ds.rejection_reasons\` AS RejectionReason
-      KEY (rejection_id)
-      LABEL RejectionReason
-      PROPERTIES (rejection_id, rejectionType, rejectionRule)
+    \`proj.ds.rejection_reasons\` AS mako_RejectionReason
+      KEY (rejection_id, session_id)
+      LABEL mako_RejectionReason
+      PROPERTIES (rejectionType, rejectionRule, extracted_at)
   )
   EDGE TABLES (
     \`proj.ds.candidate_edges\` AS CandidateEdge
-      KEY (session_id, decision_id, adUnitId)
-      SOURCE KEY (session_id, decision_id)
-        REFERENCES DecisionPoint (session_id, decision_id)
-      DESTINATION KEY (adUnitId)
-        REFERENCES YahooAdUnit (adUnitId)
+      KEY (decision_id, adUnitId, session_id)
+      SOURCE KEY (decision_id, session_id)
+        REFERENCES mako_DecisionPoint (decision_id, session_id)
+      DESTINATION KEY (adUnitId, session_id)
+        REFERENCES sup_YahooAdUnit (adUnitId, session_id)
       LABEL CandidateEdge
-      PROPERTIES (edgeType, mako_scoreValue),
+      PROPERTIES (edge_type, mako_scoreValue, extracted_at),
 
-    \`proj.ds.for_candidate_edges\` AS ForCandidate
-      KEY (rejection_id, adUnitId)
-      SOURCE KEY (rejection_id)
-        REFERENCES RejectionReason (rejection_id)
-      DESTINATION KEY (adUnitId)
-        REFERENCES YahooAdUnit (adUnitId)
+    \`proj.ds.rejection_mappings\` AS ForCandidate
+      KEY (rejection_id, adUnitId, session_id)
+      SOURCE KEY (rejection_id, session_id)
+        REFERENCES mako_RejectionReason (rejection_id, session_id)
+      DESTINATION KEY (adUnitId, session_id)
+        REFERENCES sup_YahooAdUnit (adUnitId, session_id)
       LABEL ForCandidate
+      PROPERTIES (extracted_at)
   )`,
   },
   aiGenerate: {
@@ -306,9 +327,8 @@ FROM UNNEST(@candidate_edges) AS ce;`,
 // Python SDK Code
 // ============================================================
 
-const SDK_CODE = `from bigquery_agent_analytics import Client
-from bigquery_agent_analytics.ontology import (
-    load_graph_spec,
+const SDK_CODE = `from bigquery_agent_analytics.ontology_models import load_graph_spec
+from bigquery_agent_analytics.ontology_orchestrator import (
     build_ontology_graph,
     compile_showcase_gql,
 )
@@ -325,33 +345,34 @@ spec = load_graph_spec(
 result = build_ontology_graph(
     session_ids=["sess-nike-summer-2026", "sess-elf-cosmetics-q1"],
     spec_path="ymgo_graph_spec.yaml",
-    project="proj",
-    dataset="ds",
-    endpoint="gemini-3-flash-preview",
-    dry_run=False,
+    project_id="proj",
+    dataset_id="ds",
+    env="proj.ds",
 )
-print(result.summary())
-# Entities extracted: 14
-# Edges materialized: 11
-# Property graph: proj.ds.ymgo_ad_decisioning (ACTIVE)
+print(result["graph_name"])       # YMGO_Context_Graph_V3
+print(result["graph_ref"])        # proj.ds.YMGO_Context_Graph_V3
+print(len(result["graph"].nodes)) # 14
+print(result["property_graph_created"])  # True
 
 # ── GQL generation from spec ──────────────────────────
 gql_query = compile_showcase_gql(spec, "proj", "ds")
 print(gql_query)
-# GRAPH \`proj.ds.ymgo_ad_decisioning\`
-# MATCH (dp:DecisionPoint)-[ce:CandidateEdge]->(au:YahooAdUnit) ...
+# GRAPH \`proj.ds.YMGO_Context_Graph_V3\`
+# MATCH (dp:mako_DecisionPoint)-[ece:CandidateEdge]->(yau:sup_YahooAdUnit) ...
 
 # ── CLI commands ───────────────────────────────────────
 # Build the ontology graph from terminal:
-#   bq-agent-analytics ontology-build \\
-#     --spec ymgo_graph_spec.yaml \\
-#     --project proj --dataset ds \\
+#   bq-agent-sdk ontology-build \\
+#     --spec-path ymgo_graph_spec.yaml \\
+#     --project-id proj --dataset-id ds \\
+#     --env proj.ds \\
 #     --session-ids sess-nike-summer-2026,sess-elf-cosmetics-q1
 
 # Generate showcase GQL:
-#   bq-agent-analytics ontology-showcase-gql \\
-#     --spec ymgo_graph_spec.yaml \\
-#     --project proj --dataset ds`;
+#   bq-agent-sdk ontology-showcase-gql \\
+#     --spec-path ymgo_graph_spec.yaml \\
+#     --project-id proj --dataset-id ds \\
+#     --env proj.ds`;
 
 // ============================================================
 // Reusable UI Components
