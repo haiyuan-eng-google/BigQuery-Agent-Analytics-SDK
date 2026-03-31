@@ -79,13 +79,13 @@ def compile_showcase_gql(
     graph_name: Optional[str] = None,
     relationship_name: Optional[str] = None,
     session_filter: bool = True,
-    result_limit: int = 100,
 ) -> str:
   """Generate a GQL traversal query from the ontology spec.
 
   Produces a ``MATCH`` query for a single relationship, returning
   source node properties, edge properties, and destination node
-  properties.
+  properties.  The ``LIMIT`` clause uses the ``@result_limit``
+  query parameter (set at query execution time).
 
   Args:
       spec: The validated graph spec.
@@ -96,8 +96,6 @@ def compile_showcase_gql(
           to the first relationship in the spec.
       session_filter: If True, adds a ``WHERE`` clause filtering
           by ``@session_id`` parameter.
-      result_limit: Default ``LIMIT`` value (overridden by
-          ``@result_limit`` parameter at query time).
 
   Returns:
       A GQL query string.
@@ -127,14 +125,18 @@ def compile_showcase_gql(
   name = graph_name or spec.name
   graph_ref = f"{project_id}.{dataset_id}.{name}"
 
-  # Build short aliases from entity names.
+  # Build short aliases from entity names and deduplicate all three.
   src_alias = _short_alias(src_entity.name)
   dst_alias = _short_alias(dst_entity.name)
   edge_alias = _short_alias(rel.name, prefix="e")
 
-  # Ensure aliases don't collide.
+  # Ensure no two aliases collide (src vs dst, edge vs src, edge vs dst).
   if dst_alias == src_alias:
     dst_alias = dst_alias + "2"
+  if edge_alias == src_alias:
+    edge_alias = edge_alias + "2"
+  if edge_alias == dst_alias:
+    edge_alias = edge_alias + "3"
 
   # WHERE clause.
   where_clause = ""
@@ -273,6 +275,18 @@ def build_ontology_graph(
   )
   tables_created = materializer.create_tables()
   logger.info("Tables created: %s", list(tables_created.keys()))
+
+  # Validate that all required tables were created.
+  expected_names = {e.name for e in spec.entities} | {
+      r.name for r in spec.relationships
+  }
+  missing = expected_names - set(tables_created.keys())
+  if missing:
+    raise RuntimeError(
+        f"Table creation incomplete — missing: {sorted(missing)}. "
+        f"Created: {sorted(tables_created.keys())}. "
+        "Cannot proceed with materialization."
+    )
 
   # 4. Materialize.
   rows_materialized = materializer.materialize(graph, session_ids)

@@ -48,6 +48,15 @@ _DEMO_SPEC_PATH = os.path.join(
     "ymgo_graph_spec.yaml",
 )
 
+# All entity/relationship names in the YMGO spec → mock table refs.
+_ALL_YMGO_TABLES = {
+    "mako_DecisionPoint": "p.d.decision_points",
+    "sup_YahooAdUnit": "p.d.yahoo_ad_units",
+    "mako_RejectionReason": "p.d.rejection_reasons",
+    "CandidateEdge": "p.d.candidate_edges",
+    "ForCandidate": "p.d.rejection_mappings",
+}
+
 
 def _make_entity(name, props=None, keys=None, source="p.d.t", labels=None):
   props = props or [PropertySpec(name="eid", type="string")]
@@ -209,7 +218,7 @@ class TestCompileShowcaseGql:
     assert ":ForCandidate" in gql
     assert ":sup_YahooAdUnit" in gql
 
-  def test_alias_collision_avoided(self):
+  def test_alias_collision_src_dst_avoided(self):
     """Two entities with same alias prefix get disambiguated."""
     a = _make_entity(
         "SameAlias",
@@ -238,6 +247,44 @@ class TestCompileShowcaseGql:
     # Should not raise — aliases are disambiguated.
     gql = compile_showcase_gql(spec, "proj", "ds")
     assert "MATCH" in gql
+
+  def test_alias_collision_edge_vs_node_avoided(self):
+    """Edge alias that collides with a node alias gets disambiguated."""
+    # _short_alias("Alpha") == "a", _short_alias("Alpha", prefix="e") == "ea"
+    # _short_alias("EA") == "ea" (CamelCase: E+A → "ea")
+    # So src_alias="ea" and edge_alias="ea" would collide without the fix.
+    a = _make_entity(
+        "EA",
+        props=[PropertySpec(name="a_id", type="string")],
+        keys=["a_id"],
+        source="p.d.a",
+    )
+    b = _make_entity(
+        "Beta",
+        props=[PropertySpec(name="b_id", type="string")],
+        keys=["b_id"],
+        source="p.d.b",
+    )
+    rel = RelationshipSpec(
+        name="Alpha",
+        from_entity="EA",
+        to_entity="Beta",
+        binding=BindingSpec(
+            source="p.d.edges",
+            from_columns=["a_id"],
+            to_columns=["b_id"],
+        ),
+    )
+    spec = GraphSpec(name="g", entities=[a, b], relationships=[rel])
+    gql = compile_showcase_gql(spec, "proj", "ds")
+    # Extract aliases from the MATCH clause.
+    import re
+
+    m = re.search(r"MATCH\s+\((\w+):\w+\)-\[(\w+):\w+\]->\((\w+):\w+\)", gql)
+    assert m is not None
+    src_a, edge_a, dst_a = m.group(1), m.group(2), m.group(3)
+    # All three aliases must be distinct.
+    assert len({src_a, edge_a, dst_a}) == 3
 
 
 # ------------------------------------------------------------------ #
@@ -274,9 +321,7 @@ class TestBuildOntologyGraph:
 
     # Mock materializer.
     mock_materializer = MagicMock()
-    mock_materializer.create_tables.return_value = {
-        "mako_DecisionPoint": "p.d.decision_points"
-    }
+    mock_materializer.create_tables.return_value = dict(_ALL_YMGO_TABLES)
     mock_materializer.materialize.return_value = {"mako_DecisionPoint": 1}
     mock_mat_cls.return_value = mock_materializer
 
@@ -316,7 +361,9 @@ class TestBuildOntologyGraph:
     mock_mgr_cls.return_value.extract_graph.return_value = ExtractedGraph(
         name="test"
     )
-    mock_mat_cls.return_value.create_tables.return_value = {}
+    mock_mat_cls.return_value.create_tables.return_value = dict(
+        _ALL_YMGO_TABLES
+    )
     mock_mat_cls.return_value.materialize.return_value = {}
     mock_pg_cls.return_value.create_property_graph.return_value = True
 
@@ -347,7 +394,9 @@ class TestBuildOntologyGraph:
     mock_mgr_cls.return_value.extract_graph.return_value = ExtractedGraph(
         name="test"
     )
-    mock_mat_cls.return_value.create_tables.return_value = {}
+    mock_mat_cls.return_value.create_tables.return_value = dict(
+        _ALL_YMGO_TABLES
+    )
     mock_mat_cls.return_value.materialize.return_value = {}
     mock_pg_cls.return_value.create_property_graph.return_value = True
 
@@ -364,3 +413,34 @@ class TestBuildOntologyGraph:
         session_ids=["sess1"],
         use_ai_generate=False,
     )
+
+  @patch(
+      "bigquery_agent_analytics.ontology_property_graph"
+      ".OntologyPropertyGraphCompiler"
+  )
+  @patch("bigquery_agent_analytics.ontology_materializer.OntologyMaterializer")
+  @patch("bigquery_agent_analytics.ontology_graph.OntologyGraphManager")
+  def test_partial_table_creation_raises(
+      self, mock_mgr_cls, mock_mat_cls, mock_pg_cls
+  ):
+    """Pipeline aborts if create_tables() returns incomplete set."""
+    mock_mgr_cls.return_value.extract_graph.return_value = ExtractedGraph(
+        name="test"
+    )
+    # Return only one entity — missing the other entity and relationship.
+    mock_mat_cls.return_value.create_tables.return_value = {
+        "mako_DecisionPoint": "p.d.decision_points"
+    }
+
+    with pytest.raises(RuntimeError, match="Table creation incomplete"):
+      build_ontology_graph(
+          session_ids=["sess1"],
+          spec_path=_DEMO_SPEC_PATH,
+          project_id="proj",
+          dataset_id="ds",
+          env="p.d",
+      )
+
+    # Materialize and property graph should NOT have been called.
+    mock_mat_cls.return_value.materialize.assert_not_called()
+    mock_pg_cls.return_value.create_property_graph.assert_not_called()
