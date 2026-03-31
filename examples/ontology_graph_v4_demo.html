@@ -1,0 +1,774 @@
+<!--
+  Copyright 2026 Google LLC
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+       https://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ontology Graph V4 — Configuration-Driven Context Graph</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Google Sans', 'Roboto', sans-serif; background: #f8f9fa; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #f1f1f1; }
+    ::-webkit-scrollbar-thumb { background: #dadce0; border-radius: 4px; }
+    code { font-family: 'Roboto Mono', monospace; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-in { animation: fadeIn 0.3s ease-out; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState } = React;
+
+const C = {
+  blue: { 50: '#e8f0fe', 100: '#d2e3fc', 200: '#aecbfa', 500: '#1a73e8', 600: '#1967d2', 700: '#185abc' },
+  green: { 50: '#e6f4ea', 100: '#ceead6', 500: '#34a853', 600: '#1e8e3e' },
+  yellow: { 50: '#fef7e0', 100: '#feefc3', 500: '#fbbc04', 600: '#f9ab00' },
+  red: { 50: '#fce8e6', 100: '#fad2cf', 500: '#ea4335', 600: '#d93025' },
+  purple: { 50: '#f3e8fd', 100: '#e9d5ff', 500: '#9334e6' },
+  orange: { 50: '#feefe3', 500: '#ff6d01' },
+  cyan: { 50: '#e4f7fb', 500: '#00bcd4' },
+  grey: { 50: '#f8f9fa', 100: '#f1f3f4', 200: '#e8eaed', 300: '#dadce0', 400: '#bdc1c6', 500: '#5f6368', 600: '#80868b', 700: '#3c4043', 800: '#303134', 900: '#202124' },
+};
+
+// ============================================================
+// YMGO Session Data — Ad Decisioning Ontology
+// ============================================================
+
+const YMGO_SESSIONS = [
+  {
+    id: 'sess-nike-summer-2026',
+    campaign: 'Nike Summer 2026',
+    status: 'materialized',
+    decisionPoints: [
+      { decision_id: 'dp-nike-001', decision_type: 'ad_placement_auction', label: 'Homepage Hero Auction' },
+      { decision_id: 'dp-nike-002', decision_type: 'ad_placement_auction', label: 'Sports Section Mid-Roll' },
+    ],
+    adUnits: [
+      { adUnitId: 'au-nike-101', adUnitName: 'Homepage Hero 970x250', adUnitSize: '970x250', adUnitPosition: 'above_fold' },
+      { adUnitId: 'au-nike-102', adUnitName: 'Homepage Sidebar 300x600', adUnitSize: '300x600', adUnitPosition: 'right_rail' },
+      { adUnitId: 'au-nike-103', adUnitName: 'Sports Pre-Roll Video', adUnitSize: '640x480', adUnitPosition: 'pre_roll' },
+      { adUnitId: 'au-nike-104', adUnitName: 'Sports Inline Banner 728x90', adUnitSize: '728x90', adUnitPosition: 'below_fold' },
+    ],
+    rejectionReasons: [
+      { rejection_id: 'rr-nike-201', rejectionType: 'budget_exceeded', rejectionRule: 'campaign_daily_cap >= 95%' },
+      { rejection_id: 'rr-nike-202', rejectionType: 'audience_mismatch', rejectionRule: 'segment_overlap < 0.40' },
+    ],
+    candidateEdges: [
+      { from: 'dp-nike-001', to: 'au-nike-101', edgeType: 'SELECTED_CANDIDATE', mako_scoreValue: 0.92 },
+      { from: 'dp-nike-001', to: 'au-nike-102', edgeType: 'DROPPED_CANDIDATE', mako_scoreValue: 0.41 },
+      { from: 'dp-nike-002', to: 'au-nike-103', edgeType: 'SELECTED_CANDIDATE', mako_scoreValue: 0.87 },
+      { from: 'dp-nike-002', to: 'au-nike-104', edgeType: 'DROPPED_CANDIDATE', mako_scoreValue: 0.33 },
+    ],
+    forCandidateEdges: [
+      { from: 'rr-nike-201', to: 'au-nike-102' },
+      { from: 'rr-nike-202', to: 'au-nike-104' },
+    ],
+    stats: { entities: 8, edges: 6, graphStatus: 'ACTIVE' },
+  },
+  {
+    id: 'sess-elf-cosmetics-q1',
+    campaign: 'ELF Cosmetics Q1',
+    status: 'pending_review',
+    decisionPoints: [
+      { decision_id: 'dp-elf-001', decision_type: 'ad_placement_auction', label: 'Beauty Section Takeover' },
+    ],
+    adUnits: [
+      { adUnitId: 'au-elf-101', adUnitName: 'Beauty Hero 970x250', adUnitSize: '970x250', adUnitPosition: 'above_fold' },
+      { adUnitId: 'au-elf-102', adUnitName: 'Beauty Sidebar 300x250', adUnitSize: '300x250', adUnitPosition: 'right_rail' },
+      { adUnitId: 'au-elf-103', adUnitName: 'Beauty Footer 728x90', adUnitSize: '728x90', adUnitPosition: 'below_fold' },
+    ],
+    rejectionReasons: [
+      { rejection_id: 'rr-elf-201', rejectionType: 'low_ctr_predicted', rejectionRule: 'predicted_ctr < 0.005' },
+      { rejection_id: 'rr-elf-202', rejectionType: 'below_fold_penalty', rejectionRule: 'position_weight < 0.30 AND viewability < 0.45' },
+    ],
+    candidateEdges: [
+      { from: 'dp-elf-001', to: 'au-elf-101', edgeType: 'SELECTED_CANDIDATE', mako_scoreValue: 0.95 },
+      { from: 'dp-elf-001', to: 'au-elf-102', edgeType: 'DROPPED_CANDIDATE', mako_scoreValue: 0.28 },
+      { from: 'dp-elf-001', to: 'au-elf-103', edgeType: 'DROPPED_CANDIDATE', mako_scoreValue: 0.19 },
+    ],
+    forCandidateEdges: [
+      { from: 'rr-elf-201', to: 'au-elf-102' },
+      { from: 'rr-elf-202', to: 'au-elf-103' },
+    ],
+    stats: { entities: 6, edges: 5, graphStatus: 'PENDING' },
+  },
+];
+
+// ============================================================
+// YAML Spec Content
+// ============================================================
+
+const YAML_SPEC = `# ymgo_graph_spec.yaml — Ontology Graph V4 Spec
+# Defines entity schemas and relationship bindings for
+# configuration-driven property graph construction.
+
+version: "4.0"
+graph_name: ymgo_ad_decisioning
+
+# ── Entity Definitions ──────────────────────────────────
+entities:
+  # Decision Point: an auction or placement decision
+  - name: DecisionPoint
+    table: decision_points
+    keys: [session_id, decision_id]          # composite KEY
+    properties:
+      - decision_id: STRING
+      - decision_type: STRING                # ad_placement_auction
+      - label: STRING
+      - session_id: STRING
+    # binding.source tells the pipeline which raw column
+    # feeds each property during AI.GENERATE extraction
+    binding:
+      source: agent_events.content
+      extract_with: AI.GENERATE
+
+  # Yahoo Ad Unit: the candidate ad inventory unit
+  - name: YahooAdUnit
+    table: ad_units
+    keys: [adUnitId]
+    properties:
+      - adUnitId: STRING
+      - adUnitName: STRING
+      - adUnitSize: STRING                   # e.g. "970x250"
+      - adUnitPosition: STRING               # above_fold, right_rail, etc.
+    extends: base_inventory_entity            # inherits shared cols
+
+  # Rejection Reason: why a candidate was dropped
+  - name: RejectionReason
+    table: rejection_reasons
+    keys: [rejection_id]
+    properties:
+      - rejection_id: STRING
+      - rejectionType: STRING                # budget_exceeded, etc.
+      - rejectionRule: STRING                # human-readable rule expr
+
+# ── Relationship Definitions ────────────────────────────
+relationships:
+  # CandidateEdge: links DecisionPoint -> YahooAdUnit
+  - name: CandidateEdge
+    source: DecisionPoint
+    destination: YahooAdUnit
+    table: candidate_edges
+    keys: [session_id, decision_id, adUnitId]
+    properties:
+      - edgeType: STRING                     # SELECTED_CANDIDATE | DROPPED_CANDIDATE
+      - mako_scoreValue: FLOAT64             # Mako ranking score
+    labels:
+      - SELECTED_CANDIDATE
+      - DROPPED_CANDIDATE
+
+  # ForCandidate: links RejectionReason -> YahooAdUnit
+  - name: ForCandidate
+    source: RejectionReason
+    destination: YahooAdUnit
+    table: for_candidate_edges
+    keys: [rejection_id, adUnitId]
+    properties: []                           # no extra properties`;
+
+// ============================================================
+// SQL Templates
+// ============================================================
+
+const SQL_BLOCKS = {
+  propertyGraphDDL: {
+    name: 'Property Graph DDL',
+    sql: `-- Property Graph DDL generated from ymgo_graph_spec.yaml
+-- session_id is part of composite KEY for session-scoped graphs
+CREATE OR REPLACE PROPERTY GRAPH \`proj.ds.ymgo_ad_decisioning\`
+  NODE TABLES (
+    \`proj.ds.decision_points\` AS DecisionPoint
+      KEY (session_id, decision_id)
+      LABEL DecisionPoint
+      PROPERTIES (decision_id, decision_type, label, session_id),
+
+    \`proj.ds.ad_units\` AS YahooAdUnit
+      KEY (adUnitId)
+      LABEL YahooAdUnit
+      PROPERTIES (adUnitId, adUnitName, adUnitSize, adUnitPosition),
+
+    \`proj.ds.rejection_reasons\` AS RejectionReason
+      KEY (rejection_id)
+      LABEL RejectionReason
+      PROPERTIES (rejection_id, rejectionType, rejectionRule)
+  )
+  EDGE TABLES (
+    \`proj.ds.candidate_edges\` AS CandidateEdge
+      KEY (session_id, decision_id, adUnitId)
+      SOURCE KEY (session_id, decision_id)
+        REFERENCES DecisionPoint (session_id, decision_id)
+      DESTINATION KEY (adUnitId)
+        REFERENCES YahooAdUnit (adUnitId)
+      LABEL CandidateEdge
+      PROPERTIES (edgeType, mako_scoreValue),
+
+    \`proj.ds.for_candidate_edges\` AS ForCandidate
+      KEY (rejection_id, adUnitId)
+      SOURCE KEY (rejection_id)
+        REFERENCES RejectionReason (rejection_id)
+      DESTINATION KEY (adUnitId)
+        REFERENCES YahooAdUnit (adUnitId)
+      LABEL ForCandidate
+  )`,
+  },
+  aiGenerate: {
+    name: 'AI.GENERATE Extraction',
+    sql: `-- Extract entities from raw agent events using AI.GENERATE
+-- The ontology spec binding.source drives the prompt template
+SELECT
+  base.session_id,
+  JSON_EXTRACT_SCALAR(entity, '$.decision_id') AS decision_id,
+  JSON_EXTRACT_SCALAR(entity, '$.decision_type') AS decision_type,
+  JSON_EXTRACT_SCALAR(entity, '$.label') AS label
+FROM \`proj.ds.agent_events\` AS base,
+UNNEST(JSON_EXTRACT_ARRAY(
+  AI.GENERATE(
+    CONCAT(
+      'Extract decision points from this ad-serving event payload.',
+      '\\nEntity schema: {decision_id: STRING, decision_type: STRING, label: STRING}',
+      '\\nPayload:\\n', TO_JSON_STRING(base.content)
+    ),
+    endpoint => 'https://aiplatform.googleapis.com/.../gemini-3-flash-preview',
+    output_schema => '{"type":"ARRAY","items":{"type":"OBJECT","properties":{
+      "decision_id":{"type":"STRING"},
+      "decision_type":{"type":"STRING"},
+      "label":{"type":"STRING"}
+    }}}'
+  ).result
+)) AS entity
+WHERE base.session_id IN UNNEST(@session_ids)`,
+  },
+  gqlShowcase: {
+    name: 'GQL Showcase Query',
+    sql: `-- GQL: Trace candidate decisions with rejection reasons
+-- Generated by compile_showcase_gql(spec, "proj", "ds")
+GRAPH \`proj.ds.ymgo_ad_decisioning\`
+MATCH
+  (dp:DecisionPoint)-[ce:CandidateEdge]->(au:YahooAdUnit),
+  (rr:RejectionReason)-[fc:ForCandidate]->(au)
+WHERE dp.session_id = @session_id
+  AND ce.edgeType = 'DROPPED_CANDIDATE'
+RETURN
+  dp.decision_id,
+  dp.label        AS decision_label,
+  au.adUnitName,
+  au.adUnitSize,
+  ce.mako_scoreValue,
+  rr.rejectionType,
+  rr.rejectionRule
+ORDER BY ce.mako_scoreValue DESC`,
+  },
+  insertPattern: {
+    name: 'Table Materialization INSERT',
+    sql: `-- Materialize extracted entities into node/edge tables
+-- The SDK runs this as a parameterized query per entity type
+INSERT INTO \`proj.ds.decision_points\`
+  (session_id, decision_id, decision_type, label)
+SELECT
+  @session_id           AS session_id,
+  extracted.decision_id AS decision_id,
+  extracted.decision_type,
+  extracted.label
+FROM UNNEST(@extracted_decisions) AS extracted;
+
+INSERT INTO \`proj.ds.candidate_edges\`
+  (session_id, decision_id, adUnitId, edgeType, mako_scoreValue)
+SELECT
+  @session_id,
+  ce.decision_id,
+  ce.adUnitId,
+  ce.edgeType,
+  ce.mako_scoreValue
+FROM UNNEST(@candidate_edges) AS ce;`,
+  },
+};
+
+// ============================================================
+// Python SDK Code
+// ============================================================
+
+const SDK_CODE = `from bigquery_agent_analytics import Client
+from bigquery_agent_analytics.ontology import (
+    load_graph_spec,
+    build_ontology_graph,
+    compile_showcase_gql,
+)
+
+# ── Load the YAML spec ─────────────────────────────────
+spec = load_graph_spec(
+    "ymgo_graph_spec.yaml",
+    env="proj.ds",           # BigQuery project.dataset
+)
+# spec.entities  -> [DecisionPoint, YahooAdUnit, RejectionReason]
+# spec.relationships -> [CandidateEdge, ForCandidate]
+
+# ── Full pipeline: extract + materialize + DDL ─────────
+result = build_ontology_graph(
+    session_ids=["sess-nike-summer-2026", "sess-elf-cosmetics-q1"],
+    spec_path="ymgo_graph_spec.yaml",
+    project="proj",
+    dataset="ds",
+    endpoint="gemini-3-flash-preview",
+    dry_run=False,
+)
+print(result.summary())
+# Entities extracted: 14
+# Edges materialized: 11
+# Property graph: proj.ds.ymgo_ad_decisioning (ACTIVE)
+
+# ── GQL generation from spec ──────────────────────────
+gql_query = compile_showcase_gql(spec, "proj", "ds")
+print(gql_query)
+# GRAPH \`proj.ds.ymgo_ad_decisioning\`
+# MATCH (dp:DecisionPoint)-[ce:CandidateEdge]->(au:YahooAdUnit) ...
+
+# ── CLI commands ───────────────────────────────────────
+# Build the ontology graph from terminal:
+#   bq-agent-analytics ontology-build \\
+#     --spec ymgo_graph_spec.yaml \\
+#     --project proj --dataset ds \\
+#     --session-ids sess-nike-summer-2026,sess-elf-cosmetics-q1
+
+# Generate showcase GQL:
+#   bq-agent-analytics ontology-showcase-gql \\
+#     --spec ymgo_graph_spec.yaml \\
+#     --project proj --dataset ds`;
+
+// ============================================================
+// Reusable UI Components
+// ============================================================
+
+const Tab = ({ active, onClick, icon, children }) => (
+  <button onClick={onClick} style={{
+    display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px',
+    border: 'none', borderBottom: active ? `3px solid ${C.blue[500]}` : '3px solid transparent',
+    background: 'transparent', color: active ? C.blue[500] : C.grey[500],
+    fontWeight: active ? 600 : 400, fontSize: '14px', cursor: 'pointer', transition: 'all 0.2s', whiteSpace: 'nowrap',
+  }}><span style={{ fontSize: '16px' }}>{icon}</span>{children}</button>
+);
+
+const Card = ({ children, title, subtitle, style = {}, headerAction, noPadding }) => (
+  <div style={{ background: 'white', borderRadius: '8px', boxShadow: '0 1px 2px rgba(60,64,67,0.1), 0 1px 3px rgba(60,64,67,0.08)', ...style }}>
+    {(title || headerAction) && (
+      <div style={{ padding: '16px 20px', borderBottom: `1px solid ${C.grey[200]}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          {title && <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 500, color: C.grey[900] }}>{title}</h3>}
+          {subtitle && <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: C.grey[500] }}>{subtitle}</p>}
+        </div>
+        {headerAction}
+      </div>
+    )}
+    <div style={{ padding: noPadding ? 0 : (title ? '16px 20px' : '0') }}>{children}</div>
+  </div>
+);
+
+const Badge = ({ color = 'blue', children, onClick }) => {
+  const cm = { blue: { bg: C.blue[50], text: C.blue[500] }, green: { bg: C.green[50], text: C.green[500] }, yellow: { bg: C.yellow[50], text: C.yellow[600] }, red: { bg: C.red[50], text: C.red[500] }, purple: { bg: C.purple[50], text: C.purple[500] }, grey: { bg: C.grey[100], text: C.grey[700] }, orange: { bg: C.orange[50], text: C.orange[500] } };
+  const { bg, text } = cm[color] || cm.blue;
+  return <span onClick={onClick} style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '12px', background: bg, color: text, fontSize: '11px', fontWeight: 500, cursor: onClick ? 'pointer' : 'default' }}>{children}</span>;
+};
+
+const Button = ({ onClick, primary, disabled, small, children, icon, style = {} }) => (
+  <button onClick={onClick} disabled={disabled} style={{
+    display: 'inline-flex', alignItems: 'center', gap: '6px',
+    padding: small ? '6px 12px' : '10px 20px', borderRadius: '4px',
+    border: primary ? 'none' : `1px solid ${C.grey[300]}`,
+    background: disabled ? C.grey[200] : primary ? C.blue[500] : 'white',
+    color: disabled ? C.grey[500] : primary ? 'white' : C.grey[700],
+    fontWeight: 500, fontSize: small ? '12px' : '14px',
+    cursor: disabled ? 'not-allowed' : 'pointer', transition: 'all 0.15s', ...style,
+  }}>{icon && <span>{icon}</span>}{children}</button>
+);
+
+const SQLBlock = ({ sql, maxHeight = '400px' }) => (
+  <div style={{ background: '#1e1e1e', borderRadius: '8px', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 16px', background: '#2d2d2d', borderBottom: '1px solid #404040' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ color: '#4fc3f7', fontSize: '12px' }}>BigQuery SQL / GQL</span>
+        <Badge color="purple">gemini-3-flash-preview</Badge>
+      </div>
+      <Button small onClick={() => navigator.clipboard.writeText(sql)} style={{ background: '#404040', border: 'none', color: '#ccc' }}>Copy</Button>
+    </div>
+    <pre style={{ margin: 0, padding: '16px', overflow: 'auto', maxHeight, fontSize: '12px', lineHeight: '1.6', fontFamily: "'Roboto Mono', monospace", color: '#d4d4d4' }}>{sql}</pre>
+  </div>
+);
+
+const CodeBlock = ({ code, label, maxHeight = '500px' }) => (
+  <div style={{ background: '#1e1e1e', borderRadius: '8px', overflow: 'hidden' }}>
+    {label && (
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 16px', background: '#2d2d2d', borderBottom: '1px solid #404040' }}>
+        <span style={{ color: '#4fc3f7', fontSize: '12px' }}>{label}</span>
+        <Button small onClick={() => navigator.clipboard.writeText(code)} style={{ background: '#404040', border: 'none', color: '#ccc' }}>Copy</Button>
+      </div>
+    )}
+    <pre style={{ margin: 0, padding: '16px', overflow: 'auto', maxHeight, fontSize: '12px', lineHeight: '1.6', fontFamily: "'Roboto Mono', monospace", color: '#d4d4d4' }}>{code}</pre>
+  </div>
+);
+
+// ============================================================
+// Ontology Graph SVG Visualization
+// ============================================================
+
+const OntologyGraphViz = ({ session }) => {
+  const [selectedNode, setSelectedNode] = useState(null);
+  if (!session) return null;
+
+  const W = 900, H = 480;
+  const dpNodes = session.decisionPoints.map((dp, i) => ({
+    id: dp.decision_id, kind: 'decision', label: dp.label,
+    data: dp, x: 160 + i * 300, y: 80,
+  }));
+  const auNodes = session.adUnits.map((au, i) => ({
+    id: au.adUnitId, kind: 'adunit', label: au.adUnitName,
+    data: au, x: 100 + i * 200, y: 260,
+  }));
+  const rrNodes = session.rejectionReasons.map((rr, i) => ({
+    id: rr.rejection_id, kind: 'rejection', label: rr.rejectionType,
+    data: rr, x: 160 + i * 300, y: 420,
+  }));
+  const allNodes = [...dpNodes, ...auNodes, ...rrNodes];
+  const nodeMap = new Map(allNodes.map(n => [n.id, n]));
+
+  return (
+    <div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H + 20}`} style={{ background: C.grey[50], borderRadius: '8px' }}>
+        <defs>
+          <marker id="arrow-blue" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,3 L0,6 Z" fill={C.blue[500]} />
+          </marker>
+          <marker id="arrow-red" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,3 L0,6 Z" fill={C.red[500]} />
+          </marker>
+          <marker id="arrow-orange" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,3 L0,6 Z" fill={C.orange[500]} />
+          </marker>
+        </defs>
+
+        {/* Section labels */}
+        <text x="16" y="30" fontSize="11" fill={C.grey[500]} fontWeight="500">DECISION POINTS</text>
+        <text x="16" y="220" fontSize="11" fill={C.grey[500]} fontWeight="500">YAHOO AD UNITS</text>
+        <text x="16" y="390" fontSize="11" fill={C.grey[500]} fontWeight="500">REJECTION REASONS</text>
+
+        {/* CandidateEdge arrows */}
+        {session.candidateEdges.map((ce, i) => {
+          const from = nodeMap.get(ce.from), to = nodeMap.get(ce.to);
+          if (!from || !to) return null;
+          const sel = ce.edgeType === 'SELECTED_CANDIDATE';
+          return <line key={`ce-${i}`} x1={from.x} y1={from.y + 24} x2={to.x} y2={to.y - 18}
+            stroke={sel ? C.blue[500] : C.red[500]} strokeWidth={sel ? 2.5 : 1.5}
+            strokeDasharray={sel ? 'none' : '6,4'} opacity={0.7}
+            markerEnd={sel ? 'url(#arrow-blue)' : 'url(#arrow-red)'} />;
+        })}
+
+        {/* ForCandidate arrows */}
+        {session.forCandidateEdges.map((fc, i) => {
+          const from = nodeMap.get(fc.from), to = nodeMap.get(fc.to);
+          if (!from || !to) return null;
+          return <line key={`fc-${i}`} x1={from.x} y1={from.y - 18} x2={to.x} y2={to.y + 18}
+            stroke={C.orange[500]} strokeWidth={1.5} strokeDasharray="4,3" opacity={0.6}
+            markerEnd="url(#arrow-orange)" />;
+        })}
+
+        {/* Decision Point nodes (blue circles) */}
+        {dpNodes.map(n => (
+          <g key={n.id} transform={`translate(${n.x}, ${n.y})`} onClick={() => setSelectedNode(n)} style={{ cursor: 'pointer' }}>
+            {selectedNode?.id === n.id && <circle r="28" fill="none" stroke={C.blue[500]} strokeWidth="3" />}
+            <circle r="22" fill={C.blue[500]} stroke="white" strokeWidth="2" />
+            <text textAnchor="middle" dy="4" fontSize="9" fill="white" fontWeight="500">DP</text>
+            <text textAnchor="middle" dy="40" fontSize="10" fill={C.grey[700]}>{n.label}</text>
+          </g>
+        ))}
+
+        {/* Yahoo Ad Unit nodes (green rectangles) */}
+        {auNodes.map(n => (
+          <g key={n.id} transform={`translate(${n.x}, ${n.y})`} onClick={() => setSelectedNode(n)} style={{ cursor: 'pointer' }}>
+            {selectedNode?.id === n.id && <rect x="-72" y="-20" width="144" height="40" rx="6" fill="none" stroke={C.blue[500]} strokeWidth="3" />}
+            <rect x="-68" y="-16" width="136" height="32" rx="4" fill={C.green[500]} stroke="white" strokeWidth="2" />
+            <text textAnchor="middle" dy="3" fontSize="9" fill="white" fontWeight="500">{n.data.adUnitSize}</text>
+            <text textAnchor="middle" dy="28" fontSize="9" fill={C.grey[600]}>{n.data.adUnitPosition}</text>
+          </g>
+        ))}
+
+        {/* Rejection Reason nodes (red diamonds) */}
+        {rrNodes.map(n => (
+          <g key={n.id} transform={`translate(${n.x}, ${n.y})`} onClick={() => setSelectedNode(n)} style={{ cursor: 'pointer' }}>
+            {selectedNode?.id === n.id && <polygon points="0,-24 24,0 0,24 -24,0" fill="none" stroke={C.blue[500]} strokeWidth="3" />}
+            <polygon points="0,-18 18,0 0,18 -18,0" fill={C.red[500]} stroke="white" strokeWidth="2" />
+            <text textAnchor="middle" dy="4" fontSize="7" fill="white" fontWeight="500">RR</text>
+            <text textAnchor="middle" dy="32" fontSize="9" fill={C.grey[700]}>{n.label}</text>
+          </g>
+        ))}
+
+        {/* Score labels on candidate edges */}
+        {session.candidateEdges.map((ce, i) => {
+          const from = nodeMap.get(ce.from), to = nodeMap.get(ce.to);
+          if (!from || !to) return null;
+          const mx = (from.x + to.x) / 2, my = (from.y + 24 + to.y - 18) / 2;
+          return <text key={`lbl-${i}`} x={mx + 12} y={my} fontSize="9" fill={ce.edgeType === 'SELECTED_CANDIDATE' ? C.blue[600] : C.red[600]} fontWeight="500">{ce.mako_scoreValue.toFixed(2)}</text>;
+        })}
+
+        {/* Legend */}
+        <g transform={`translate(16, ${H + 6})`}>
+          <circle cx="6" cy="0" r="5" fill={C.blue[500]} /><text x="16" y="4" fontSize="9" fill={C.grey[500]}>Decision Point</text>
+          <rect x="120" y="-6" width="12" height="12" rx="2" fill={C.green[500]} /><text x="138" y="4" fontSize="9" fill={C.grey[500]}>Ad Unit</text>
+          <polygon points="210,0 218,-6 226,0 218,6" fill={C.red[500]} /><text x="232" y="4" fontSize="9" fill={C.grey[500]}>Rejection</text>
+          <line x1="310" y1="0" x2="340" y2="0" stroke={C.blue[500]} strokeWidth="2" /><text x="346" y="4" fontSize="9" fill={C.grey[500]}>Selected</text>
+          <line x1="400" y1="0" x2="430" y2="0" stroke={C.red[500]} strokeWidth="1.5" strokeDasharray="6,4" /><text x="436" y="4" fontSize="9" fill={C.grey[500]}>Dropped</text>
+          <line x1="490" y1="0" x2="520" y2="0" stroke={C.orange[500]} strokeWidth="1.5" strokeDasharray="4,3" /><text x="526" y="4" fontSize="9" fill={C.grey[500]}>ForCandidate</text>
+        </g>
+      </svg>
+
+      {selectedNode && (
+        <Card style={{ marginTop: '12px', border: `2px solid ${C.blue[200]}` }} title={
+          selectedNode.kind === 'decision' ? `DecisionPoint: ${selectedNode.label}` :
+          selectedNode.kind === 'adunit' ? `YahooAdUnit: ${selectedNode.data.adUnitName}` :
+          `RejectionReason: ${selectedNode.label}`
+        }>
+          <div style={{ fontSize: '12px' }}>
+            {selectedNode.kind === 'decision' && (
+              <div>
+                <div><strong>decision_id:</strong> <code>{selectedNode.data.decision_id}</code></div>
+                <div><strong>decision_type:</strong> {selectedNode.data.decision_type}</div>
+                <div style={{ marginTop: '8px' }}><strong>Candidate edges:</strong></div>
+                {session.candidateEdges.filter(e => e.from === selectedNode.id).map((e, i) => {
+                  const au = session.adUnits.find(a => a.adUnitId === e.to);
+                  return <div key={i} style={{ marginLeft: '12px', marginTop: '4px' }}>
+                    <Badge color={e.edgeType === 'SELECTED_CANDIDATE' ? 'green' : 'red'}>{e.edgeType}</Badge>
+                    {' '}{au?.adUnitName} (score: {e.mako_scoreValue.toFixed(2)})
+                  </div>;
+                })}
+              </div>
+            )}
+            {selectedNode.kind === 'adunit' && (
+              <div>
+                <div><strong>adUnitId:</strong> <code>{selectedNode.data.adUnitId}</code></div>
+                <div><strong>adUnitSize:</strong> {selectedNode.data.adUnitSize}</div>
+                <div><strong>adUnitPosition:</strong> {selectedNode.data.adUnitPosition}</div>
+              </div>
+            )}
+            {selectedNode.kind === 'rejection' && (
+              <div>
+                <div><strong>rejection_id:</strong> <code>{selectedNode.data.rejection_id}</code></div>
+                <div><strong>rejectionType:</strong> <Badge color="red">{selectedNode.data.rejectionType}</Badge></div>
+                <div><strong>rejectionRule:</strong> <code>{selectedNode.data.rejectionRule}</code></div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+};
+
+// ============================================================
+// YAML Spec Panel
+// ============================================================
+
+const YAMLSpecPanel = () => (
+  <div style={{ display: 'grid', gap: '16px' }}>
+    <Card title="YMGO Graph Spec" subtitle="Configuration-driven ontology definition (ymgo_graph_spec.yaml)">
+      <CodeBlock code={YAML_SPEC} label="YAML Ontology Spec" maxHeight="520px" />
+    </Card>
+    <Card title="Spec Annotations" subtitle="Key configuration concepts">
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '12px' }}>
+        <div style={{ padding: '12px', background: C.blue[50], borderRadius: '6px' }}>
+          <strong style={{ color: C.blue[600] }}>binding.source</strong>
+          <p style={{ color: C.grey[700], marginTop: '4px' }}>Maps an entity's properties to the raw source column. For example, <code>agent_events.content</code> tells AI.GENERATE which field to parse for extraction.</p>
+        </div>
+        <div style={{ padding: '12px', background: C.green[50], borderRadius: '6px' }}>
+          <strong style={{ color: C.green[600] }}>keys (composite)</strong>
+          <p style={{ color: C.grey[700], marginTop: '4px' }}>Composite keys like <code>[session_id, decision_id]</code> become the KEY clause in the Property Graph DDL, scoping nodes per session.</p>
+        </div>
+        <div style={{ padding: '12px', background: C.purple[50], borderRadius: '6px' }}>
+          <strong style={{ color: C.purple[500] }}>extends</strong>
+          <p style={{ color: C.grey[700], marginTop: '4px' }}>Inherits shared columns from a base entity definition. <code>extends: base_inventory_entity</code> pulls in common ad-inventory fields.</p>
+        </div>
+        <div style={{ padding: '12px', background: C.orange[50], borderRadius: '6px' }}>
+          <strong style={{ color: C.orange[500] }}>relationships.labels</strong>
+          <p style={{ color: C.grey[700], marginTop: '4px' }}>Edge label arrays like <code>[SELECTED_CANDIDATE, DROPPED_CANDIDATE]</code> enable GQL pattern matching by decision outcome.</p>
+        </div>
+      </div>
+    </Card>
+  </div>
+);
+
+// ============================================================
+// Generated SQL Panel
+// ============================================================
+
+const GeneratedSQLPanel = () => {
+  const [activeSQL, setActiveSQL] = useState('propertyGraphDDL');
+  const block = SQL_BLOCKS[activeSQL];
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+        {Object.entries(SQL_BLOCKS).map(([key, b]) => (
+          <Badge key={key} color={activeSQL === key ? 'blue' : 'grey'} onClick={() => setActiveSQL(key)}>{b.name}</Badge>
+        ))}
+      </div>
+      <SQLBlock sql={block.sql} maxHeight="500px" />
+    </div>
+  );
+};
+
+// ============================================================
+// Python SDK Panel
+// ============================================================
+
+const PythonSDKPanel = () => (
+  <Card title="Python SDK Usage" subtitle="bigquery_agent_analytics.ontology module + CLI">
+    <CodeBlock code={SDK_CODE} label="Python SDK" maxHeight="560px" />
+  </Card>
+);
+
+// ============================================================
+// Main App
+// ============================================================
+
+function App() {
+  const [activeTab, setActiveTab] = useState('graph');
+  const [activeSession, setActiveSession] = useState(0);
+  const session = YMGO_SESSIONS[activeSession];
+
+  return (
+    <div style={{ fontFamily: "'Google Sans', 'Roboto', sans-serif", background: C.grey[50], minHeight: '100vh' }}>
+      {/* Header */}
+      <header style={{ background: 'white', borderBottom: `1px solid ${C.grey[200]}`, padding: '12px 24px', display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ width: '40px', height: '40px', background: `linear-gradient(135deg, ${C.blue[500]}, ${C.green[500]})`, borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '16px' }}>BQ</div>
+          <div>
+            <h1 style={{ margin: 0, fontSize: '18px', color: C.grey[900] }}>Ontology Graph V4 — Configuration-Driven Context Graph</h1>
+            <p style={{ margin: 0, fontSize: '11px', color: C.grey[500] }}>YMGO Ad Decisioning Pipeline</p>
+          </div>
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <Badge color="blue">BigQuery Property Graph</Badge>
+          <Badge color="purple">AI.GENERATE</Badge>
+          <Badge color="green">GQL</Badge>
+          <Badge color="orange">YAML Ontology</Badge>
+        </div>
+      </header>
+
+      {/* Tabs */}
+      <nav style={{ background: 'white', borderBottom: `1px solid ${C.grey[200]}`, paddingLeft: '24px', display: 'flex', overflow: 'auto' }}>
+        <Tab active={activeTab === 'graph'} onClick={() => setActiveTab('graph')} icon="&#x1F578;">Ontology Graph</Tab>
+        <Tab active={activeTab === 'yaml'} onClick={() => setActiveTab('yaml')} icon="&#x2699;">YAML Spec</Tab>
+        <Tab active={activeTab === 'sql'} onClick={() => setActiveTab('sql')} icon="&#x1F5C3;">Generated SQL</Tab>
+        <Tab active={activeTab === 'sdk'} onClick={() => setActiveTab('sdk')} icon="&#x1F40D;">Python SDK</Tab>
+      </nav>
+
+      <main style={{ padding: '24px', maxWidth: '1400px', margin: '0 auto' }}>
+        {/* Session Selector */}
+        <Card style={{ marginBottom: '20px', padding: '16px' }}>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '13px', fontWeight: 500, color: C.grey[700] }}>YMGO Session:</span>
+            {YMGO_SESSIONS.map((s, i) => (
+              <Button key={s.id} small primary={activeSession === i} onClick={() => setActiveSession(i)}>
+                {s.campaign}
+                {s.status === 'materialized' ? ' \u2713' : ' \u25CB'}
+              </Button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: '24px', fontSize: '12px', color: C.grey[500], marginTop: '12px' }}>
+            <span>Session: <code style={{ background: C.grey[100], padding: '2px 6px', borderRadius: '3px' }}>{session.id}</code></span>
+            <span>Decision Points: {session.decisionPoints.length}</span>
+            <span>Ad Units: {session.adUnits.length}</span>
+            <span>Rejections: {session.rejectionReasons.length}</span>
+            <span>Status: <Badge color={session.status === 'materialized' ? 'green' : 'yellow'}>{session.status}</Badge></span>
+          </div>
+        </Card>
+
+        {/* Tab Content */}
+        {activeTab === 'graph' && (
+          <div style={{ display: 'grid', gap: '20px' }}>
+            <Card title="Ontology Graph Visualization" subtitle="DecisionPoint -> CandidateEdge -> YahooAdUnit | RejectionReason -> ForCandidate -> YahooAdUnit">
+              <OntologyGraphViz session={session} />
+            </Card>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+              <Card title="Decision Points" subtitle={`${session.decisionPoints.length} auction decisions`}>
+                {session.decisionPoints.map((dp, i) => (
+                  <div key={i} style={{ padding: '8px 0', borderBottom: i < session.decisionPoints.length - 1 ? `1px solid ${C.grey[200]}` : 'none', fontSize: '12px' }}>
+                    <Badge color="blue">{dp.decision_type}</Badge>
+                    <div style={{ marginTop: '4px', color: C.grey[700] }}>{dp.label}</div>
+                    <code style={{ fontSize: '10px', color: C.grey[500] }}>{dp.decision_id}</code>
+                  </div>
+                ))}
+              </Card>
+              <Card title="Ad Unit Candidates" subtitle={`${session.adUnits.length} Yahoo ad units`}>
+                {session.adUnits.map((au, i) => {
+                  const edge = session.candidateEdges.find(e => e.to === au.adUnitId);
+                  return (
+                    <div key={i} style={{ padding: '8px 0', borderBottom: i < session.adUnits.length - 1 ? `1px solid ${C.grey[200]}` : 'none', fontSize: '12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ color: C.grey[700] }}>{au.adUnitName}</span>
+                        {edge && <Badge color={edge.edgeType === 'SELECTED_CANDIDATE' ? 'green' : 'red'}>{edge.edgeType === 'SELECTED_CANDIDATE' ? 'SELECTED' : 'DROPPED'}</Badge>}
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                        <Badge color="grey">{au.adUnitSize}</Badge>
+                        <Badge color="grey">{au.adUnitPosition}</Badge>
+                        {edge && <span style={{ fontSize: '11px', color: C.grey[500] }}>score: {edge.mako_scoreValue.toFixed(2)}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </Card>
+              <Card title="Rejection Reasons" subtitle={`${session.rejectionReasons.length} drop reasons`}>
+                {session.rejectionReasons.map((rr, i) => {
+                  const fc = session.forCandidateEdges.find(e => e.from === rr.rejection_id);
+                  const au = fc ? session.adUnits.find(a => a.adUnitId === fc.to) : null;
+                  return (
+                    <div key={i} style={{ padding: '8px 0', borderBottom: i < session.rejectionReasons.length - 1 ? `1px solid ${C.grey[200]}` : 'none', fontSize: '12px' }}>
+                      <Badge color="red">{rr.rejectionType}</Badge>
+                      <div style={{ marginTop: '4px', color: C.grey[700] }}><code style={{ fontSize: '10px' }}>{rr.rejectionRule}</code></div>
+                      {au && <div style={{ marginTop: '4px', fontSize: '11px', color: C.grey[500] }}>Applied to: {au.adUnitName}</div>}
+                    </div>
+                  );
+                })}
+              </Card>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'yaml' && <YAMLSpecPanel />}
+        {activeTab === 'sql' && <GeneratedSQLPanel />}
+        {activeTab === 'sdk' && <PythonSDKPanel />}
+      </main>
+
+      {/* Footer */}
+      <footer style={{ padding: '16px 24px', borderTop: `1px solid ${C.grey[200]}`, background: 'white' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', maxWidth: '1400px', margin: '0 auto', fontSize: '12px', color: C.grey[500] }}>
+          <span>BigQuery Agent Analytics SDK — Ontology Graph V4</span>
+          <div style={{ display: 'flex', gap: '24px' }}>
+            <span>Entities extracted: <strong style={{ color: C.grey[700] }}>{session.stats.entities}</strong></span>
+            <span>Edges materialized: <strong style={{ color: C.grey[700] }}>{session.stats.edges}</strong></span>
+            <span>Property graph: <Badge color={session.stats.graphStatus === 'ACTIVE' ? 'green' : 'yellow'}>{session.stats.graphStatus}</Badge></span>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>

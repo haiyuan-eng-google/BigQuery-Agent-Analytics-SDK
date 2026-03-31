@@ -266,8 +266,8 @@ graph:
 | 2 | Spec Loader + Schema Compiler | Merged (PR #54) |
 | 3 | Ontology Extraction Engine | Merged (PR #55) |
 | 4 | Physical Table Materialization + Routing | Merged (PR #56) |
-| 5 | Dynamic Property Graph DDL Transpiler | **Next** |
-| 6 | Showcase Query Path + Demo | Planned |
+| 5 | Dynamic Property Graph DDL Transpiler | Merged (PR #57) |
+| 6 | Showcase Query Path + Orchestrator | Merged (PR #58) |
 
 ---
 
@@ -290,34 +290,38 @@ graph:
 CREATE OR REPLACE PROPERTY GRAPH `project.dataset.YMGO_Context_Graph`
   NODE TABLES (
     `project.dataset.decision_points` AS mako_DecisionPoint
-      KEY (decision_id)
+      KEY (decision_id, session_id)
       LABEL mako_DecisionPoint
-      PROPERTIES (decision_type, session_id, extracted_at),
+      PROPERTIES (decision_type, extracted_at),
     `project.dataset.yahoo_ad_units` AS sup_YahooAdUnit
-      KEY (adUnitId)
+      KEY (adUnitId, session_id)
       LABEL sup_YahooAdUnit
       LABEL mako_Candidate
-      PROPERTIES (adUnitName, adUnitSize, adUnitPosition, session_id, extracted_at),
+      PROPERTIES (adUnitName, adUnitSize, adUnitPosition, extracted_at),
     `project.dataset.rejection_reasons` AS mako_RejectionReason
-      KEY (rejection_id)
+      KEY (rejection_id, session_id)
       LABEL mako_RejectionReason
-      PROPERTIES (rejectionType, rejectionRule, session_id, extracted_at)
+      PROPERTIES (rejectionType, rejectionRule, extracted_at)
   )
   EDGE TABLES (
     `project.dataset.candidate_edges` AS CandidateEdge
-      KEY (decision_id, adUnitId)
-      SOURCE KEY (decision_id) REFERENCES mako_DecisionPoint (decision_id)
-      DESTINATION KEY (adUnitId) REFERENCES sup_YahooAdUnit (adUnitId)
+      KEY (decision_id, adUnitId, session_id)
+      SOURCE KEY (decision_id, session_id) REFERENCES mako_DecisionPoint (decision_id, session_id)
+      DESTINATION KEY (adUnitId, session_id) REFERENCES sup_YahooAdUnit (adUnitId, session_id)
       LABEL CandidateEdge
-      PROPERTIES (edge_type, mako_scoreValue, session_id, extracted_at),
+      PROPERTIES (edge_type, mako_scoreValue, extracted_at),
     `project.dataset.rejection_mappings` AS ForCandidate
-      KEY (rejection_id, adUnitId)
-      SOURCE KEY (rejection_id) REFERENCES mako_RejectionReason (rejection_id)
-      DESTINATION KEY (adUnitId) REFERENCES sup_YahooAdUnit (adUnitId)
+      KEY (rejection_id, adUnitId, session_id)
+      SOURCE KEY (rejection_id, session_id) REFERENCES mako_RejectionReason (rejection_id, session_id)
+      DESTINATION KEY (adUnitId, session_id) REFERENCES sup_YahooAdUnit (adUnitId, session_id)
       LABEL ForCandidate
-      PROPERTIES (session_id, extracted_at)
+      PROPERTIES (extracted_at)
   )
 ```
+
+> **Note:** Node KEY includes `session_id` so that the same business entity
+> in different sessions produces distinct graph nodes, making multi-session
+> builds safe.
 
 **Deliverables:**
 
