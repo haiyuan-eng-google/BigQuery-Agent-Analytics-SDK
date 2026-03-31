@@ -350,10 +350,11 @@ class TestBuildNodeId:
         keys=["k1", "k2"],
     )
     raw_node = {"entity_name": "Multi", "k1": "abc"}  # k2 missing
-    node_id = _build_node_id(raw_node, "Multi", entity, "sess1", 0)
-    # Only k1 present — still produces key-based ID (partial keys are
-    # better than index for matching edges that may also be partial).
-    assert node_id == "sess1:Multi:k1=abc"
+    node_id = _build_node_id(raw_node, "Multi", entity, "sess1", 7)
+    # Partial composite key falls back to index — partial keys would
+    # create ambiguous identities that diverge from edge refs carrying
+    # the full composite key.
+    assert node_id == "sess1:Multi:7"
 
 
 # ------------------------------------------------------------------ #
@@ -760,6 +761,59 @@ class TestHydrateGraph:
     edge = graph.edges[0]
     assert edge.from_node_id in node_ids
     assert edge.to_node_id in node_ids
+
+  def test_duplicate_nodes_deduplicated(self):
+    """Same entity + same key values → single node (last wins)."""
+    rows = [
+        {
+            "session_id": "sess1",
+            "graph_json": json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "entity_name": "Alpha",
+                            "alpha_id": "a1",
+                            "score": 0.5,
+                        },
+                        {
+                            "entity_name": "Alpha",
+                            "alpha_id": "a1",
+                            "score": 0.9,
+                        },
+                    ],
+                    "edges": [],
+                }
+            ),
+        }
+    ]
+    graph = _hydrate_graph(_simple_spec(), rows)
+    assert len(graph.nodes) == 1
+    assert graph.nodes[0].node_id == "sess1:Alpha:alpha_id=a1"
+    # Last occurrence wins.
+    prop_map = {p.name: p.value for p in graph.nodes[0].properties}
+    assert prop_map["score"] == 0.9
+
+  def test_duplicate_nodes_different_keys_kept(self):
+    """Same entity type but different key values → distinct nodes."""
+    rows = [
+        {
+            "session_id": "sess1",
+            "graph_json": json.dumps(
+                {
+                    "nodes": [
+                        {"entity_name": "Alpha", "alpha_id": "a1"},
+                        {"entity_name": "Alpha", "alpha_id": "a2"},
+                    ],
+                    "edges": [],
+                }
+            ),
+        }
+    ]
+    graph = _hydrate_graph(_simple_spec(), rows)
+    assert len(graph.nodes) == 2
+    ids = {n.node_id for n in graph.nodes}
+    assert "sess1:Alpha:alpha_id=a1" in ids
+    assert "sess1:Alpha:alpha_id=a2" in ids
 
 
 # ------------------------------------------------------------------ #

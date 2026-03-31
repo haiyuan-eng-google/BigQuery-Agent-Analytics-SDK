@@ -144,9 +144,13 @@ def _hydrate_graph(
 
   Node IDs are key-based: ``{session_id}:{entity_name}:{key1=v1,...}``,
   matching the edge reference scheme so that ``edge.from_node_id``
-  resolves to a hydrated node's ``node_id``.  For nodes whose primary
-  key values are missing or whose entity is unknown to the spec, a
-  fallback index-based ID is used.
+  resolves to a hydrated node's ``node_id``.  Key-based IDs require
+  *all* primary key columns to be present; if any are missing (or the
+  entity is unknown to the spec), the fallback index-based ID
+  ``{session_id}:{entity_name}:{idx}`` is used instead.
+
+  Duplicate nodes (same ``node_id``) are deduplicated: the last
+  occurrence wins, keeping the most recent/complete data.
 
   Edge IDs: ``{session_id}:{relationship_name}:{idx}``.
 
@@ -159,7 +163,7 @@ def _hydrate_graph(
       A merged ``ExtractedGraph`` with all nodes and edges.
   """
   entity_map = {e.name: e for e in spec.entities}
-  all_nodes: list[ExtractedNode] = []
+  seen_nodes: dict[str, ExtractedNode] = {}
   all_edges: list[ExtractedEdge] = []
 
   for row in raw_rows:
@@ -198,13 +202,11 @@ def _hydrate_graph(
           continue
         props.append(ExtractedProperty(name=key, value=value))
 
-      all_nodes.append(
-          ExtractedNode(
-              node_id=node_id,
-              entity_name=entity_name,
-              labels=labels,
-              properties=props,
-          )
+      seen_nodes[node_id] = ExtractedNode(
+          node_id=node_id,
+          entity_name=entity_name,
+          labels=labels,
+          properties=props,
       )
 
     # Hydrate edges.
@@ -240,7 +242,7 @@ def _hydrate_graph(
 
   return ExtractedGraph(
       name=spec.name,
-      nodes=all_nodes,
+      nodes=list(seen_nodes.values()),
       edges=all_edges,
   )
 
@@ -272,8 +274,10 @@ def _build_node_id(
   if entity_spec is not None:
     keys_obj = {}
     for col in entity_spec.keys.primary:
-      if col in raw_node:
-        keys_obj[col] = raw_node[col]
+      if col not in raw_node:
+        # Missing key column — fall back to index-based ID.
+        return f"{session_id}:{entity_name}:{idx}"
+      keys_obj[col] = raw_node[col]
     key_str = _build_key_string(keys_obj)
     if key_str:
       return f"{session_id}:{entity_name}:{key_str}"
