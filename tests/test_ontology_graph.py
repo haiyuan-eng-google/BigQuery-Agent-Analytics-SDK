@@ -23,6 +23,7 @@ from unittest.mock import patch
 import pytest
 
 from bigquery_agent_analytics.ontology_graph import _build_edge_node_ref
+from bigquery_agent_analytics.ontology_graph import _build_node_id
 from bigquery_agent_analytics.ontology_graph import _hydrate_graph
 from bigquery_agent_analytics.ontology_graph import OntologyGraphManager
 from bigquery_agent_analytics.ontology_models import BindingSpec
@@ -282,6 +283,78 @@ class TestGetExtractionSql:
     # so any internal single quotes must be escaped.
     assert "endpoint =>" in sql
 
+  def test_sql_aggregates_per_session(self):
+    """SQL uses a CTE to aggregate events into per-session transcripts."""
+    mgr = OntologyGraphManager(
+        project_id="proj",
+        dataset_id="ds",
+        spec=_simple_spec(),
+        bq_client=_mock_bq_client(),
+    )
+    sql = mgr.get_extraction_sql()
+    assert "session_transcripts" in sql
+    assert "STRING_AGG" in sql
+    assert "GROUP BY" in sql
+    # AI.GENERATE runs on the aggregated transcript, not per-row.
+    assert "st.transcript" in sql
+
+
+# ------------------------------------------------------------------ #
+# _build_node_id                                                       #
+# ------------------------------------------------------------------ #
+
+
+class TestBuildNodeId:
+
+  def test_single_key(self):
+    spec = _simple_spec()
+    entity_spec = spec.entities[0]  # Alpha, key=alpha_id
+    raw_node = {"entity_name": "Alpha", "alpha_id": "a1", "score": 0.9}
+    node_id = _build_node_id(raw_node, "Alpha", entity_spec, "sess1", 0)
+    assert node_id == "sess1:Alpha:alpha_id=a1"
+
+  def test_composite_keys_sorted(self):
+    entity = _make_entity(
+        "Multi",
+        props=[
+            PropertySpec(name="k1", type="string"),
+            PropertySpec(name="k2", type="int64"),
+            PropertySpec(name="val", type="double"),
+        ],
+        keys=["k1", "k2"],
+    )
+    raw_node = {"entity_name": "Multi", "k2": 42, "k1": "abc", "val": 1.0}
+    node_id = _build_node_id(raw_node, "Multi", entity, "sess1", 0)
+    assert node_id == "sess1:Multi:k1=abc,k2=42"
+
+  def test_missing_key_falls_back_to_index(self):
+    spec = _simple_spec()
+    entity_spec = spec.entities[0]  # Alpha, key=alpha_id
+    raw_node = {"entity_name": "Alpha", "score": 0.9}  # no alpha_id
+    node_id = _build_node_id(raw_node, "Alpha", entity_spec, "sess1", 3)
+    assert node_id == "sess1:Alpha:3"
+
+  def test_unknown_entity_falls_back_to_index(self):
+    raw_node = {"entity_name": "Unknown", "x": 1}
+    node_id = _build_node_id(raw_node, "Unknown", None, "sess1", 5)
+    assert node_id == "sess1:Unknown:5"
+
+  def test_partial_composite_key_falls_back_to_index(self):
+    """If only some composite key columns present, fall back to index."""
+    entity = _make_entity(
+        "Multi",
+        props=[
+            PropertySpec(name="k1", type="string"),
+            PropertySpec(name="k2", type="int64"),
+        ],
+        keys=["k1", "k2"],
+    )
+    raw_node = {"entity_name": "Multi", "k1": "abc"}  # k2 missing
+    node_id = _build_node_id(raw_node, "Multi", entity, "sess1", 0)
+    # Only k1 present — still produces key-based ID (partial keys are
+    # better than index for matching edges that may also be partial).
+    assert node_id == "sess1:Multi:k1=abc"
+
 
 # ------------------------------------------------------------------ #
 # _hydrate_graph                                                       #
@@ -299,7 +372,6 @@ class TestHydrateGraph:
   def test_single_node(self):
     rows = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": json.dumps(
                 {
@@ -318,7 +390,7 @@ class TestHydrateGraph:
     graph = _hydrate_graph(_simple_spec(), rows)
     assert len(graph.nodes) == 1
     node = graph.nodes[0]
-    assert node.node_id == "sess1:s1:Alpha:0"
+    assert node.node_id == "sess1:Alpha:alpha_id=a1"
     assert node.entity_name == "Alpha"
     assert node.labels == ["Alpha"]
     assert len(node.properties) == 2  # alpha_id, score
@@ -326,7 +398,6 @@ class TestHydrateGraph:
   def test_node_properties_extracted(self):
     rows = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": json.dumps(
                 {
@@ -350,7 +421,6 @@ class TestHydrateGraph:
   def test_entity_name_excluded_from_properties(self):
     rows = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": json.dumps(
                 {
@@ -364,10 +434,9 @@ class TestHydrateGraph:
     prop_names = [p.name for p in graph.nodes[0].properties]
     assert "entity_name" not in prop_names
 
-  def test_multiple_nodes_across_rows(self):
+  def test_multiple_nodes_across_sessions(self):
     rows = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": json.dumps(
                 {
@@ -377,8 +446,7 @@ class TestHydrateGraph:
             ),
         },
         {
-            "span_id": "s2",
-            "session_id": "sess1",
+            "session_id": "sess2",
             "graph_json": json.dumps(
                 {
                     "nodes": [{"entity_name": "Beta", "beta_id": "b1"}],
@@ -389,13 +457,12 @@ class TestHydrateGraph:
     ]
     graph = _hydrate_graph(_simple_spec(), rows)
     assert len(graph.nodes) == 2
-    assert graph.nodes[0].node_id == "sess1:s1:Alpha:0"
-    assert graph.nodes[1].node_id == "sess1:s2:Beta:0"
+    assert graph.nodes[0].node_id == "sess1:Alpha:alpha_id=a1"
+    assert graph.nodes[1].node_id == "sess2:Beta:beta_id=b1"
 
   def test_multiple_nodes_in_single_row(self):
     rows = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": json.dumps(
                 {
@@ -410,13 +477,12 @@ class TestHydrateGraph:
     ]
     graph = _hydrate_graph(_simple_spec(), rows)
     assert len(graph.nodes) == 2
-    assert graph.nodes[0].node_id == "sess1:s1:Alpha:0"
-    assert graph.nodes[1].node_id == "sess1:s1:Alpha:1"
+    assert graph.nodes[0].node_id == "sess1:Alpha:alpha_id=a1"
+    assert graph.nodes[1].node_id == "sess1:Alpha:alpha_id=a2"
 
   def test_edge_hydration(self):
     rows = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": json.dumps(
                 {
@@ -438,13 +504,12 @@ class TestHydrateGraph:
     graph = _hydrate_graph(_simple_spec(), rows)
     assert len(graph.edges) == 1
     edge = graph.edges[0]
-    assert edge.edge_id == "sess1:s1:AlphaToBeta:0"
+    assert edge.edge_id == "sess1:AlphaToBeta:0"
     assert edge.relationship_name == "AlphaToBeta"
 
   def test_edge_from_to_node_refs(self):
     rows = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": json.dumps(
                 {
@@ -464,13 +529,12 @@ class TestHydrateGraph:
     ]
     graph = _hydrate_graph(_simple_spec(), rows)
     edge = graph.edges[0]
-    assert edge.from_node_id == "sess1:s1:Alpha:alpha_id=a1"
-    assert edge.to_node_id == "sess1:s1:Beta:beta_id=b1"
+    assert edge.from_node_id == "sess1:Alpha:alpha_id=a1"
+    assert edge.to_node_id == "sess1:Beta:beta_id=b1"
 
   def test_edge_properties_extracted(self):
     rows = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": json.dumps(
                 {
@@ -496,7 +560,6 @@ class TestHydrateGraph:
   def test_edge_structural_fields_excluded_from_properties(self):
     rows = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": json.dumps(
                 {
@@ -527,8 +590,8 @@ class TestHydrateGraph:
 
   def test_empty_graph_json_skipped(self):
     rows = [
-        {"span_id": "s1", "session_id": "sess1", "graph_json": ""},
-        {"span_id": "s2", "session_id": "sess1", "graph_json": None},
+        {"session_id": "sess1", "graph_json": ""},
+        {"session_id": "sess2", "graph_json": None},
     ]
     graph = _hydrate_graph(_simple_spec(), rows)
     assert len(graph.nodes) == 0
@@ -537,7 +600,6 @@ class TestHydrateGraph:
   def test_invalid_json_skipped(self):
     rows = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": "not valid json{",
         }
@@ -548,7 +610,6 @@ class TestHydrateGraph:
   def test_non_dict_json_skipped(self):
     rows = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": json.dumps([1, 2, 3]),
         }
@@ -559,7 +620,6 @@ class TestHydrateGraph:
   def test_unknown_entity_uses_name_as_label(self):
     rows = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": json.dumps(
                 {
@@ -572,6 +632,21 @@ class TestHydrateGraph:
     graph = _hydrate_graph(_simple_spec(), rows)
     assert graph.nodes[0].labels == ["Unknown"]
 
+  def test_unknown_entity_falls_back_to_index_id(self):
+    rows = [
+        {
+            "session_id": "sess1",
+            "graph_json": json.dumps(
+                {
+                    "nodes": [{"entity_name": "Unknown", "x": 1}],
+                    "edges": [],
+                }
+            ),
+        }
+    ]
+    graph = _hydrate_graph(_simple_spec(), rows)
+    assert graph.nodes[0].node_id == "sess1:Unknown:0"
+
   def test_labels_from_spec_entity(self):
     """Labels are resolved from the spec's entity definition."""
     spec = _simple_spec()
@@ -579,7 +654,6 @@ class TestHydrateGraph:
     spec.entities[0].labels = ["Alpha", "BaseEntity"]
     rows = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": json.dumps(
                 {
@@ -591,6 +665,101 @@ class TestHydrateGraph:
     ]
     graph = _hydrate_graph(spec, rows)
     assert graph.nodes[0].labels == ["Alpha", "BaseEntity"]
+
+  def test_node_edge_id_consistency(self):
+    """Edge from_node_id/to_node_id must match hydrated node IDs.
+
+    This is the core invariant: the graph must be internally
+    consistent so that consumers can resolve edge endpoints.
+    """
+    rows = [
+        {
+            "session_id": "sess1",
+            "graph_json": json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "entity_name": "Alpha",
+                            "alpha_id": "a1",
+                            "score": 0.9,
+                        },
+                        {
+                            "entity_name": "Beta",
+                            "beta_id": "b1",
+                            "active": True,
+                        },
+                    ],
+                    "edges": [
+                        {
+                            "relationship_name": "AlphaToBeta",
+                            "from_entity_name": "Alpha",
+                            "to_entity_name": "Beta",
+                            "from_keys": {"alpha_id": "a1"},
+                            "to_keys": {"beta_id": "b1"},
+                            "weight": 0.5,
+                        }
+                    ],
+                }
+            ),
+        }
+    ]
+    graph = _hydrate_graph(_simple_spec(), rows)
+    node_ids = {n.node_id for n in graph.nodes}
+    assert len(graph.edges) == 1
+    edge = graph.edges[0]
+    assert edge.from_node_id in node_ids
+    assert edge.to_node_id in node_ids
+
+  def test_node_edge_id_consistency_composite_keys(self):
+    """Edge refs resolve to nodes even with composite primary keys."""
+    entity = _make_entity(
+        "Multi",
+        props=[
+            PropertySpec(name="k1", type="string"),
+            PropertySpec(name="k2", type="int64"),
+        ],
+        keys=["k1", "k2"],
+    )
+    other = _make_entity("Other")
+    rel = RelationshipSpec(
+        name="R",
+        from_entity="Multi",
+        to_entity="Other",
+        binding=BindingSpec(
+            source="p.d.edges",
+            from_columns=["k1", "k2"],
+            to_columns=["eid"],
+        ),
+    )
+    spec = GraphSpec(name="g", entities=[entity, other], relationships=[rel])
+
+    rows = [
+        {
+            "session_id": "sess1",
+            "graph_json": json.dumps(
+                {
+                    "nodes": [
+                        {"entity_name": "Multi", "k1": "abc", "k2": 42},
+                        {"entity_name": "Other", "eid": "o1"},
+                    ],
+                    "edges": [
+                        {
+                            "relationship_name": "R",
+                            "from_entity_name": "Multi",
+                            "to_entity_name": "Other",
+                            "from_keys": {"k1": "abc", "k2": 42},
+                            "to_keys": {"eid": "o1"},
+                        }
+                    ],
+                }
+            ),
+        }
+    ]
+    graph = _hydrate_graph(spec, rows)
+    node_ids = {n.node_id for n in graph.nodes}
+    edge = graph.edges[0]
+    assert edge.from_node_id in node_ids
+    assert edge.to_node_id in node_ids
 
 
 # ------------------------------------------------------------------ #
@@ -605,39 +774,39 @@ class TestBuildEdgeNodeRef:
         "from_entity_name": "Alpha",
         "from_keys": {"alpha_id": "a1"},
     }
-    ref = _build_edge_node_ref(raw_edge, "from", "sess1", "s1")
-    assert ref == "sess1:s1:Alpha:alpha_id=a1"
+    ref = _build_edge_node_ref(raw_edge, "from", "sess1")
+    assert ref == "sess1:Alpha:alpha_id=a1"
 
   def test_composite_keys_sorted(self):
     raw_edge = {
         "from_entity_name": "Multi",
         "from_keys": {"k2": 42, "k1": "abc"},
     }
-    ref = _build_edge_node_ref(raw_edge, "from", "sess1", "s1")
-    assert ref == "sess1:s1:Multi:k1=abc,k2=42"
+    ref = _build_edge_node_ref(raw_edge, "from", "sess1")
+    assert ref == "sess1:Multi:k1=abc,k2=42"
 
   def test_empty_keys_object(self):
     raw_edge = {
         "to_entity_name": "Beta",
         "to_keys": {},
     }
-    ref = _build_edge_node_ref(raw_edge, "to", "sess1", "s1")
-    assert ref == "sess1:s1:Beta:unknown"
+    ref = _build_edge_node_ref(raw_edge, "to", "sess1")
+    assert ref == "sess1:Beta:unknown"
 
   def test_missing_keys_field(self):
     raw_edge = {
         "to_entity_name": "Beta",
     }
-    ref = _build_edge_node_ref(raw_edge, "to", "sess1", "s1")
-    assert ref == "sess1:s1:Beta:unknown"
+    ref = _build_edge_node_ref(raw_edge, "to", "sess1")
+    assert ref == "sess1:Beta:unknown"
 
   def test_to_direction(self):
     raw_edge = {
         "to_entity_name": "Beta",
         "to_keys": {"beta_id": "b1"},
     }
-    ref = _build_edge_node_ref(raw_edge, "to", "sess1", "s1")
-    assert ref == "sess1:s1:Beta:beta_id=b1"
+    ref = _build_edge_node_ref(raw_edge, "to", "sess1")
+    assert ref == "sess1:Beta:beta_id=b1"
 
 
 # ------------------------------------------------------------------ #
@@ -660,7 +829,6 @@ class TestExtractGraph:
     mock_job = MagicMock()
     mock_job.result.return_value = [
         {
-            "span_id": "s1",
             "session_id": "sess1",
             "graph_json": json.dumps(
                 {

@@ -46,6 +46,7 @@ from typing import Optional
 
 from google.cloud import bigquery
 
+from .ontology_models import EntitySpec
 from .ontology_models import ExtractedEdge
 from .ontology_models import ExtractedGraph
 from .ontology_models import ExtractedNode
@@ -61,21 +62,39 @@ logger = logging.getLogger("bigquery_agent_analytics." + __name__)
 # ------------------------------------------------------------------ #
 
 _EXTRACT_ONTOLOGY_AI_QUERY = """\
+WITH session_transcripts AS (
+  SELECT
+    base.session_id,
+    STRING_AGG(
+      COALESCE(
+        JSON_EXTRACT_SCALAR(base.content, '$.text_summary'),
+        JSON_EXTRACT_SCALAR(base.content, '$.response'),
+        JSON_EXTRACT_SCALAR(base.content, '$.text'),
+        TO_JSON_STRING(base.content)
+      ),
+      '\\n---\\n'
+      ORDER BY base.timestamp ASC
+    ) AS transcript
+  FROM `{project}.{dataset}.{table}` AS base
+  WHERE base.session_id IN UNNEST(@session_ids)
+    AND base.event_type IN (
+      'LLM_RESPONSE',
+      'TOOL_COMPLETED',
+      'AGENT_COMPLETED',
+      'HITL_CONFIRMATION_REQUEST_COMPLETED'
+    )
+    AND base.content IS NOT NULL
+  GROUP BY base.session_id
+)
 SELECT
-  base.span_id,
-  base.session_id,
+  st.session_id,
   REGEXP_REPLACE(
     REGEXP_REPLACE(
       AI.GENERATE(
         CONCAT(
           '{prompt}',
           '\\n',
-          COALESCE(
-            JSON_EXTRACT_SCALAR(base.content, '$.text_summary'),
-            JSON_EXTRACT_SCALAR(base.content, '$.response'),
-            JSON_EXTRACT_SCALAR(base.content, '$.text'),
-            TO_JSON_STRING(base.content)
-          )
+          st.transcript
         ),
         endpoint => '{endpoint}',
         output_schema => '{output_schema}'
@@ -83,16 +102,7 @@ SELECT
       r'^```(?:json)?\\s*', ''),
     r'\\s*```$', '')
   AS graph_json
-FROM `{project}.{dataset}.{table}` AS base
-WHERE base.session_id IN UNNEST(@session_ids)
-  AND base.event_type IN (
-    'LLM_RESPONSE',
-    'TOOL_COMPLETED',
-    'AGENT_COMPLETED',
-    'HITL_CONFIRMATION_REQUEST_COMPLETED'
-  )
-  AND base.content IS NOT NULL
-ORDER BY base.timestamp ASC
+FROM session_transcripts AS st
 """
 
 _EXTRACT_PAYLOADS_QUERY = """\
@@ -128,14 +138,21 @@ def _hydrate_graph(
 ) -> ExtractedGraph:
   """Hydrate raw AI.GENERATE JSON rows into an ``ExtractedGraph``.
 
-  Each row contains ``span_id``, ``session_id``, and ``graph_json``
-  (a JSON string with ``nodes`` and ``edges`` arrays).  Nodes receive
-  deterministic IDs: ``{session_id}:{span_id}:{entity_name}:{idx}``.
-  Edges receive: ``{session_id}:{span_id}:{relationship_name}:{idx}``.
+  Each row contains ``session_id`` and ``graph_json`` (a JSON string
+  with ``nodes`` and ``edges`` arrays).  One row per session is
+  expected from the session-aggregated AI.GENERATE query.
+
+  Node IDs are key-based: ``{session_id}:{entity_name}:{key1=v1,...}``,
+  matching the edge reference scheme so that ``edge.from_node_id``
+  resolves to a hydrated node's ``node_id``.  For nodes whose primary
+  key values are missing or whose entity is unknown to the spec, a
+  fallback index-based ID is used.
+
+  Edge IDs: ``{session_id}:{relationship_name}:{idx}``.
 
   Args:
       spec: The ``GraphSpec`` used for extraction.
-      raw_rows: List of dicts with ``span_id``, ``session_id``,
+      raw_rows: List of dicts with ``session_id`` and
           ``graph_json`` keys.
 
   Returns:
@@ -146,7 +163,6 @@ def _hydrate_graph(
   all_edges: list[ExtractedEdge] = []
 
   for row in raw_rows:
-    span_id = row.get("span_id", "")
     session_id = row.get("session_id", "")
     raw_json = row.get("graph_json", "")
 
@@ -156,14 +172,14 @@ def _hydrate_graph(
     try:
       data = json.loads(raw_json)
     except (json.JSONDecodeError, TypeError):
-      logger.debug("Could not parse graph JSON for span %s", span_id)
+      logger.debug("Could not parse graph JSON for session %s", session_id)
       continue
 
     if not isinstance(data, dict):
       logger.debug(
-          "Expected dict from graph JSON, got %s for span %s",
+          "Expected dict from graph JSON, got %s for session %s",
           type(data).__name__,
-          span_id,
+          session_id,
       )
       continue
 
@@ -173,7 +189,9 @@ def _hydrate_graph(
       entity_spec = entity_map.get(entity_name)
       labels = entity_spec.labels if entity_spec else [entity_name]
 
-      node_id = f"{session_id}:{span_id}:{entity_name}:{idx}"
+      node_id = _build_node_id(
+          raw_node, entity_name, entity_spec, session_id, idx
+      )
       props = []
       for key, value in raw_node.items():
         if key == "entity_name":
@@ -192,10 +210,10 @@ def _hydrate_graph(
     # Hydrate edges.
     for idx, raw_edge in enumerate(data.get("edges", [])):
       rel_name = raw_edge.get("relationship_name", "")
-      edge_id = f"{session_id}:{span_id}:{rel_name}:{idx}"
+      edge_id = f"{session_id}:{rel_name}:{idx}"
 
-      from_node_id = _build_edge_node_ref(raw_edge, "from", session_id, span_id)
-      to_node_id = _build_edge_node_ref(raw_edge, "to", session_id, span_id)
+      from_node_id = _build_edge_node_ref(raw_edge, "from", session_id)
+      to_node_id = _build_edge_node_ref(raw_edge, "to", session_id)
 
       props = []
       skip_keys = {
@@ -227,23 +245,60 @@ def _hydrate_graph(
   )
 
 
+def _build_key_string(keys_obj: dict) -> str:
+  """Build a sorted ``k1=v1,k2=v2`` string from a key-value dict."""
+  if isinstance(keys_obj, dict) and keys_obj:
+    return ",".join(f"{k}={v}" for k, v in sorted(keys_obj.items()))
+  return ""
+
+
+def _build_node_id(
+    raw_node: dict,
+    entity_name: str,
+    entity_spec: Optional[EntitySpec],
+    session_id: str,
+    idx: int,
+) -> str:
+  """Build a deterministic node ID from primary key values.
+
+  Uses the entity's primary key columns (from the spec) to extract
+  key values from the raw node dict, producing IDs like
+  ``{session_id}:{entity_name}:{key1=val1,key2=val2}``.
+
+  Falls back to ``{session_id}:{entity_name}:{idx}`` when:
+  - The entity is unknown to the spec
+  - Primary key values are missing from the raw node
+  """
+  if entity_spec is not None:
+    keys_obj = {}
+    for col in entity_spec.keys.primary:
+      if col in raw_node:
+        keys_obj[col] = raw_node[col]
+    key_str = _build_key_string(keys_obj)
+    if key_str:
+      return f"{session_id}:{entity_name}:{key_str}"
+  return f"{session_id}:{entity_name}:{idx}"
+
+
 def _build_edge_node_ref(
     raw_edge: dict,
     direction: str,
     session_id: str,
-    span_id: str,
 ) -> str:
   """Build a node reference string from an edge's key data.
 
   Uses ``from_keys``/``to_keys`` object to construct a deterministic
-  reference like ``session:span:entity_name:key1=val1,key2=val2``.
+  reference like ``{session_id}:{entity_name}:{key1=val1,key2=val2}``.
+
+  This matches the ID scheme used by ``_build_node_id``, so edge
+  references resolve to hydrated node IDs in the same graph.
   """
   entity_name = raw_edge.get(f"{direction}_entity_name", "")
   keys_obj = raw_edge.get(f"{direction}_keys", {})
-  if isinstance(keys_obj, dict) and keys_obj:
-    key_str = ",".join(f"{k}={v}" for k, v in sorted(keys_obj.items()))
-    return f"{session_id}:{span_id}:{entity_name}:{key_str}"
-  return f"{session_id}:{span_id}:{entity_name}:unknown"
+  key_str = _build_key_string(keys_obj)
+  if key_str:
+    return f"{session_id}:{entity_name}:{key_str}"
+  return f"{session_id}:{entity_name}:unknown"
 
 
 # ------------------------------------------------------------------ #
