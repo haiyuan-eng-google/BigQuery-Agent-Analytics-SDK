@@ -744,6 +744,93 @@ class TestMaterialize:
     )
     assert result == {}
 
+  def test_shared_binding_source_no_data_loss(self):
+    """Two entities sharing the same binding.source must not lose rows.
+
+    When multiple spec entries map to the same physical table, the
+    materializer must group all rows before doing one delete + one
+    insert per table.  Previously, each entity triggered its own
+    delete-then-insert, causing the second delete to wipe rows
+    inserted for the first entity.
+    """
+    # Two entities both bind to the SAME physical table.
+    shared_table = "p.d.shared_table"
+    alpha = _make_entity(
+        "Alpha",
+        props=[
+            PropertySpec(name="alpha_id", type="string"),
+            PropertySpec(name="kind", type="string"),
+        ],
+        keys=["alpha_id"],
+        source=shared_table,
+    )
+    beta = _make_entity(
+        "Beta",
+        props=[
+            PropertySpec(name="beta_id", type="string"),
+            PropertySpec(name="kind", type="string"),
+        ],
+        keys=["beta_id"],
+        source=shared_table,
+    )
+    spec = GraphSpec(
+        name="shared_test", entities=[alpha, beta], relationships=[]
+    )
+
+    graph = ExtractedGraph(
+        name="shared_test",
+        nodes=[
+            ExtractedNode(
+                node_id="sess1:Alpha:alpha_id=a1",
+                entity_name="Alpha",
+                labels=["Alpha"],
+                properties=[
+                    ExtractedProperty(name="alpha_id", value="a1"),
+                    ExtractedProperty(name="kind", value="alpha"),
+                ],
+            ),
+            ExtractedNode(
+                node_id="sess1:Beta:beta_id=b1",
+                entity_name="Beta",
+                labels=["Beta"],
+                properties=[
+                    ExtractedProperty(name="beta_id", value="b1"),
+                    ExtractedProperty(name="kind", value="beta"),
+                ],
+            ),
+        ],
+    )
+
+    mock_client = _mock_bq_client()
+    mock_job = MagicMock()
+    mock_job.result.return_value = None
+    mock_client.query.return_value = mock_job
+    mock_client.insert_rows_json.return_value = []
+
+    mat = OntologyMaterializer(
+        project_id="proj",
+        dataset_id="ds",
+        spec=spec,
+        bq_client=mock_client,
+    )
+    result = mat.materialize(graph, session_ids=["sess1"])
+
+    # Both entities should appear in the result.
+    assert result["Alpha"] == 1
+    assert result["Beta"] == 1
+
+    # Only ONE delete call — both entities share the same table.
+    assert mock_client.query.call_count == 1
+    delete_sql = mock_client.query.call_args_list[0][0][0]
+    assert shared_table in delete_sql
+
+    # Only ONE insert call — both rows batched together.
+    assert mock_client.insert_rows_json.call_count == 1
+    insert_call = mock_client.insert_rows_json.call_args_list[0]
+    assert insert_call[0][0] == shared_table
+    rows = insert_call[0][1]
+    assert len(rows) == 2
+
   def test_insert_error_does_not_crash(self):
     mock_client = _mock_bq_client()
     mock_job = MagicMock()

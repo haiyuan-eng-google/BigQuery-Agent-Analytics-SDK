@@ -453,76 +453,73 @@ class OntologyMaterializer:
     rel_map = {r.name: r for r in self.spec.relationships}
     result: dict[str, int] = {}
 
-    # Group nodes by entity name.
-    nodes_by_entity: dict[str, list[ExtractedNode]] = {}
-    for node in graph.nodes:
-      if node.entity_name in entity_map:
-        nodes_by_entity.setdefault(node.entity_name, []).append(node)
-      else:
-        logger.debug("Skipping node with unknown entity %r", node.entity_name)
-
-    # Group edges by relationship name.
-    edges_by_rel: dict[str, list[ExtractedEdge]] = {}
-    for edge in graph.edges:
-      if edge.relationship_name in rel_map:
-        edges_by_rel.setdefault(edge.relationship_name, []).append(edge)
-      else:
-        logger.debug(
-            "Skipping edge with unknown relationship %r",
-            edge.relationship_name,
-        )
-
     # Derive session_id for rows from the session_ids parameter.
     # For single-session extractions this is straightforward; for
     # multi-session, nodes already carry session_id in their node_id.
     default_session_id = session_ids[0] if len(session_ids) == 1 else ""
 
-    # Materialize entities.
-    for entity_name, nodes in nodes_by_entity.items():
-      entity = entity_map[entity_name]
+    # Collect all rows per physical table.  Multiple spec entries
+    # may share the same binding.source, so we group by resolved
+    # table ref to avoid delete-then-insert races on shared tables.
+    table_rows: dict[str, list[dict]] = {}
+    # Track per-name counts for the return value.
+    name_counts: dict[str, int] = {}
+
+    # Route nodes.
+    for node in graph.nodes:
+      entity = entity_map.get(node.entity_name)
+      if entity is None:
+        logger.debug("Skipping node with unknown entity %r", node.entity_name)
+        continue
       table_ref = self._table_ref(entity.binding.source)
+      parts = node.node_id.split(":")
+      sid = parts[0] if parts else default_session_id
+      row = _route_node(node, entity, sid)
+      table_rows.setdefault(table_ref, []).append(row)
+      name_counts[node.entity_name] = name_counts.get(node.entity_name, 0) + 1
 
-      # Delete existing data for idempotency.
-      self._delete_for_sessions(table_ref, session_ids)
-
-      rows = []
-      for node in nodes:
-        # Extract session_id from node_id: "{session_id}:{entity}:..."
-        parts = node.node_id.split(":")
-        sid = parts[0] if parts else default_session_id
-        rows.append(_route_node(node, entity, sid))
-
-      if rows:
-        try:
-          errors = self.bq_client.insert_rows_json(table_ref, rows)
-          if errors:
-            logger.error("Insert errors for %s: %s", entity_name, errors)
-          else:
-            result[entity_name] = len(rows)
-        except Exception as e:
-          logger.warning("Failed to insert rows for %s: %s", entity_name, e)
-
-    # Materialize relationships.
-    for rel_name, edges in edges_by_rel.items():
-      rel = rel_map[rel_name]
+    # Route edges.
+    for edge in graph.edges:
+      rel = rel_map.get(edge.relationship_name)
+      if rel is None:
+        logger.debug(
+            "Skipping edge with unknown relationship %r",
+            edge.relationship_name,
+        )
+        continue
       table_ref = self._table_ref(rel.binding.source)
+      parts = edge.from_node_id.split(":")
+      sid = parts[0] if parts else default_session_id
+      row = _route_edge(edge, rel, self.spec, sid)
+      table_rows.setdefault(table_ref, []).append(row)
+      name_counts[edge.relationship_name] = (
+          name_counts.get(edge.relationship_name, 0) + 1
+      )
 
+    # One delete + one insert per physical table.
+    inserted_tables: set[str] = set()
+    for table_ref, rows in table_rows.items():
       self._delete_for_sessions(table_ref, session_ids)
+      try:
+        errors = self.bq_client.insert_rows_json(table_ref, rows)
+        if errors:
+          logger.error("Insert errors for %s: %s", table_ref, errors)
+        else:
+          inserted_tables.add(table_ref)
+      except Exception as e:
+        logger.warning("Failed to insert rows for %s: %s", table_ref, e)
 
-      rows = []
-      for edge in edges:
-        parts = edge.from_node_id.split(":")
-        sid = parts[0] if parts else default_session_id
-        rows.append(_route_edge(edge, rel, self.spec, sid))
-
-      if rows:
-        try:
-          errors = self.bq_client.insert_rows_json(table_ref, rows)
-          if errors:
-            logger.error("Insert errors for %s: %s", rel_name, errors)
-          else:
-            result[rel_name] = len(rows)
-        except Exception as e:
-          logger.warning("Failed to insert rows for %s: %s", rel_name, e)
+    # Build result: only include names whose table insert succeeded.
+    for name, count in name_counts.items():
+      entity = entity_map.get(name)
+      rel = rel_map.get(name)
+      if entity:
+        ref = self._table_ref(entity.binding.source)
+      elif rel:
+        ref = self._table_ref(rel.binding.source)
+      else:
+        continue
+      if ref in inserted_tables:
+        result[name] = count
 
     return result
