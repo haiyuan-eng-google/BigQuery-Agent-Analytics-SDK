@@ -1,0 +1,88 @@
+# YMGO (Yahoo Media Graph Ontology) V3 — Context Graph Specification
+#
+# This YAML defines the ontology for a configuration-driven context graph.
+# Use {{ env }} placeholders for environment-specific table bindings,
+# resolved at load time via load_graph_spec(path, env="project.dataset").
+
+graph:
+  name: YMGO_Context_Graph_V3
+
+  # ==========================================
+  # 1. ENTITIES (Nodes)
+  # ==========================================
+  entities:
+    - name: mako_DecisionPoint
+      description: "The atomic unit of decisioning where an agent evaluates alternatives."
+      binding:
+        source: "{{ env }}.decision_points"
+      keys:
+        primary: [decision_id]
+      properties:
+        - name: decision_id
+          type: string
+        - name: decision_type
+          type: string
+
+    - name: sup_YahooAdUnit
+      extends: mako_Candidate
+      description: "A specific ad slot on a Yahoo property being evaluated as a candidate."
+      binding:
+        source: "{{ env }}.yahoo_ad_units"
+      keys:
+        primary: [adUnitId]
+      properties:
+        - name: adUnitId
+          type: string
+        - name: adUnitName
+          type: string
+        - name: adUnitSize
+          type: string
+          description: "e.g., '300x250', '728x90'"
+        - name: adUnitPosition
+          type: string
+          description: "ATF (above the fold) | BTF (below the fold)"
+
+    - name: mako_RejectionReason
+      description: "Structured reason why a Candidate was not selected at a DecisionPoint."
+      binding:
+        source: "{{ env }}.rejection_reasons"
+      keys:
+        primary: [rejection_id]
+      properties:
+        - name: rejection_id
+          type: string
+        - name: rejectionType
+          type: string
+          description: "RULE_BASED | MODEL_BASED | TIMEOUT | ERROR"
+        - name: rejectionRule
+          type: string
+          description: "The specific rule or model threshold that caused rejection."
+
+  # ==========================================
+  # 2. RELATIONSHIPS (Edges)
+  # ==========================================
+  relationships:
+    - name: CandidateEdge
+      description: "Connects a decision point to the evaluated Yahoo Ad Unit."
+      from_entity: mako_DecisionPoint
+      to_entity: sup_YahooAdUnit
+      binding:
+        source: "{{ env }}.candidate_edges"
+        from_columns: [decision_id]
+        to_columns: [adUnitId]
+      properties:
+        - name: edge_type
+          type: string
+          description: "SELECTED_CANDIDATE or DROPPED_CANDIDATE"
+        - name: mako_scoreValue
+          type: double
+          description: "The confidence or predicted Q-value for this candidate."
+
+    - name: ForCandidate
+      description: "Maps the MAKO rejection rationale directly to the dropped candidate."
+      from_entity: mako_RejectionReason
+      to_entity: sup_YahooAdUnit
+      binding:
+        source: "{{ env }}.rejection_mappings"
+        from_columns: [rejection_id]
+        to_columns: [adUnitId]
