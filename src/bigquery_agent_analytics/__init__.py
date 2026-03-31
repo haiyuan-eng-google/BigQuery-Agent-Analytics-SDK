@@ -387,6 +387,23 @@ except ImportError as e:
       e,
   )
 
+# Ontology Schema Compiler
+try:
+  from .ontology_schema_compiler import compile_extraction_prompt
+  from .ontology_schema_compiler import compile_output_schema
+
+  __all__.extend(
+      [
+          "compile_extraction_prompt",
+          "compile_output_schema",
+      ]
+  )
+except ImportError as e:
+  logger.debug(
+      "Could not import ontology schema compiler: %s.",
+      e,
+  )
+
 # BigFrames Evaluator (optional bigframes dependency)
 try:
   from .bigframes_evaluator import BigFramesEvaluator
