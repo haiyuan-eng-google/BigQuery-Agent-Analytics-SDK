@@ -303,6 +303,88 @@ class TestCompileEdgeTableClause:
     assert "a_id" not in props_section
     assert "extra" in props_section
 
+  def test_subset_from_columns_raises(self):
+    """from_columns that are a subset of the entity PK are rejected."""
+    src = _make_entity(
+        "Src",
+        props=[
+            PropertySpec(name="k1", type="string"),
+            PropertySpec(name="k2", type="int64"),
+        ],
+        keys=["k1", "k2"],
+        source="p.d.src",
+    )
+    tgt = _make_entity("Tgt", source="p.d.tgt")
+    rel = RelationshipSpec(
+        name="R",
+        from_entity="Src",
+        to_entity="Tgt",
+        binding=BindingSpec(
+            source="p.d.edges",
+            from_columns=["k2"],
+            to_columns=["eid"],
+        ),
+    )
+    spec = GraphSpec(name="g", entities=[src, tgt], relationships=[rel])
+    with pytest.raises(
+        ValueError, match="from_columns.*do not match.*primary key"
+    ):
+      compile_edge_table_clause(rel, spec, "proj", "ds")
+
+  def test_subset_to_columns_raises(self):
+    """to_columns that are a subset of the entity PK are rejected."""
+    src = _make_entity("Src", source="p.d.src")
+    tgt = _make_entity(
+        "Tgt",
+        props=[
+            PropertySpec(name="t1", type="string"),
+            PropertySpec(name="t2", type="string"),
+        ],
+        keys=["t1", "t2"],
+        source="p.d.tgt",
+    )
+    rel = RelationshipSpec(
+        name="R",
+        from_entity="Src",
+        to_entity="Tgt",
+        binding=BindingSpec(
+            source="p.d.edges",
+            from_columns=["eid"],
+            to_columns=["t1"],
+        ),
+    )
+    spec = GraphSpec(name="g", entities=[src, tgt], relationships=[rel])
+    with pytest.raises(
+        ValueError, match="to_columns.*do not match.*primary key"
+    ):
+      compile_edge_table_clause(rel, spec, "proj", "ds")
+
+  def test_full_pk_binding_accepted(self):
+    """from_columns == entity PK passes validation."""
+    src = _make_entity(
+        "Src",
+        props=[
+            PropertySpec(name="k1", type="string"),
+            PropertySpec(name="k2", type="int64"),
+        ],
+        keys=["k1", "k2"],
+        source="p.d.src",
+    )
+    tgt = _make_entity("Tgt", source="p.d.tgt")
+    rel = RelationshipSpec(
+        name="R",
+        from_entity="Src",
+        to_entity="Tgt",
+        binding=BindingSpec(
+            source="p.d.edges",
+            from_columns=["k1", "k2"],
+            to_columns=["eid"],
+        ),
+    )
+    spec = GraphSpec(name="g", entities=[src, tgt], relationships=[rel])
+    clause = compile_edge_table_clause(rel, spec, "proj", "ds")
+    assert "SOURCE KEY (k1, k2) REFERENCES Src (k1, k2)" in clause
+
 
 # ------------------------------------------------------------------ #
 # compile_property_graph_ddl                                           #

@@ -135,6 +135,13 @@ def compile_edge_table_clause(
   references the source node table's key.  Likewise for
   ``DESTINATION KEY``.
 
+  BigQuery Property Graph requires that ``SOURCE KEY`` columns
+  match the referenced ``NODE TABLE KEY`` exactly.  Subset
+  bindings (``from_columns`` narrower than the entity's primary
+  key) are valid for table materialization but produce invalid
+  property-graph DDL.  This function raises ``ValueError`` if
+  it detects a mismatch.
+
   Args:
       rel: The relationship spec.
       spec: The parent graph spec (for entity lookups).
@@ -143,6 +150,10 @@ def compile_edge_table_clause(
 
   Returns:
       A SQL fragment for the EDGE TABLES block.
+
+  Raises:
+      ValueError: If ``from_columns`` or ``to_columns`` do not
+          match the referenced entity's full primary key.
   """
   entity_map = {e.name: e for e in spec.entities}
   src = entity_map[rel.from_entity]
@@ -152,6 +163,26 @@ def compile_edge_table_clause(
 
   from_cols = rel.binding.from_columns or list(src.keys.primary)
   to_cols = rel.binding.to_columns or list(tgt.keys.primary)
+
+  # Validate that binding columns match the entity's full PK.
+  # Property Graph requires SOURCE/DESTINATION KEY to exactly
+  # match the referenced NODE TABLE KEY.
+  if list(from_cols) != list(src.keys.primary):
+    raise ValueError(
+        f"Relationship {rel.name!r}: from_columns {list(from_cols)} "
+        f"do not match {rel.from_entity} primary key "
+        f"{list(src.keys.primary)}. Property Graph DDL requires "
+        f"exact key matching. Subset bindings are supported for "
+        f"materialization but not for Property Graph compilation."
+    )
+  if list(to_cols) != list(tgt.keys.primary):
+    raise ValueError(
+        f"Relationship {rel.name!r}: to_columns {list(to_cols)} "
+        f"do not match {rel.to_entity} primary key "
+        f"{list(tgt.keys.primary)}. Property Graph DDL requires "
+        f"exact key matching. Subset bindings are supported for "
+        f"materialization but not for Property Graph compilation."
+    )
 
   # Edge KEY = from_columns + to_columns (deduplicated).
   edge_key_cols = list(from_cols)
