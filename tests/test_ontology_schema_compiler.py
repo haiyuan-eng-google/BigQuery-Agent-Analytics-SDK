@@ -161,15 +161,58 @@ class TestCompileOutputSchema:
   def test_edge_schema_has_structural_fields(self):
     parsed = json.loads(compile_output_schema(_simple_spec()))
     edge_props = parsed["properties"]["edges"]["items"]["properties"]
-    for field in [
-        "relationship_name",
-        "from_entity_name",
-        "to_entity_name",
-        "from_key",
-        "to_key",
-    ]:
+    for field in ["relationship_name", "from_entity_name", "to_entity_name"]:
       assert field in edge_props
       assert edge_props[field]["type"] == "STRING"
+    # Composite key objects.
+    assert edge_props["from_keys"]["type"] == "OBJECT"
+    assert edge_props["to_keys"]["type"] == "OBJECT"
+
+  def test_edge_from_keys_typed_from_source_entity(self):
+    parsed = json.loads(compile_output_schema(_simple_spec()))
+    from_keys = parsed["properties"]["edges"]["items"]["properties"][
+        "from_keys"
+    ]
+    assert "alpha_id" in from_keys["properties"]
+    assert from_keys["properties"]["alpha_id"]["type"] == "STRING"
+
+  def test_edge_to_keys_typed_from_target_entity(self):
+    parsed = json.loads(compile_output_schema(_simple_spec()))
+    to_keys = parsed["properties"]["edges"]["items"]["properties"]["to_keys"]
+    assert "beta_id" in to_keys["properties"]
+    assert to_keys["properties"]["beta_id"]["type"] == "STRING"
+
+  def test_composite_keys_preserved(self):
+    """Multi-column primary keys appear as separate properties."""
+    entity = _make_entity(
+        "Multi",
+        props=[
+            PropertySpec(name="k1", type="string"),
+            PropertySpec(name="k2", type="int64"),
+            PropertySpec(name="val", type="double"),
+        ],
+        keys=["k1", "k2"],
+    )
+    other = _make_entity("Other")
+    rel = RelationshipSpec(
+        name="R",
+        from_entity="Multi",
+        to_entity="Other",
+        binding=BindingSpec(
+            source="p.d.edges",
+            from_columns=["k1", "k2"],
+            to_columns=["eid"],
+        ),
+    )
+    spec = GraphSpec(name="g", entities=[entity, other], relationships=[rel])
+    parsed = json.loads(compile_output_schema(spec))
+    from_keys = parsed["properties"]["edges"]["items"]["properties"][
+        "from_keys"
+    ]["properties"]
+    assert "k1" in from_keys
+    assert from_keys["k1"]["type"] == "STRING"
+    assert "k2" in from_keys
+    assert from_keys["k2"]["type"] == "INTEGER"
 
   def test_edge_schema_includes_relationship_properties(self):
     parsed = json.loads(compile_output_schema(_simple_spec()))
@@ -247,6 +290,58 @@ class TestCompileOutputSchema:
     for v in node_props.values():
       assert v["type"] in ("STRING", "NUMBER", "BOOLEAN", "INTEGER")
 
+  def test_same_property_same_type_no_collision(self):
+    """Same property name + same type across entities is OK."""
+    a = _make_entity(
+        "A",
+        props=[PropertySpec(name="shared", type="string")],
+        keys=["shared"],
+    )
+    b = _make_entity(
+        "B",
+        props=[PropertySpec(name="shared", type="string")],
+        keys=["shared"],
+    )
+    spec = GraphSpec(name="g", entities=[a, b])
+    # Should not raise.
+    compile_output_schema(spec)
+
+  def test_node_property_type_collision_raises(self):
+    a = _make_entity(
+        "A",
+        props=[PropertySpec(name="val", type="string")],
+        keys=["val"],
+    )
+    b = _make_entity(
+        "B",
+        props=[PropertySpec(name="val", type="int64")],
+        keys=["val"],
+    )
+    spec = GraphSpec(name="g", entities=[a, b])
+    with pytest.raises(ValueError, match="Property name collision.*val"):
+      compile_output_schema(spec)
+
+  def test_edge_property_type_collision_raises(self):
+    a = _make_entity("A")
+    b = _make_entity("B")
+    r1 = RelationshipSpec(
+        name="R1",
+        from_entity="A",
+        to_entity="B",
+        binding=BindingSpec(source="p.d.t"),
+        properties=[PropertySpec(name="w", type="double")],
+    )
+    r2 = RelationshipSpec(
+        name="R2",
+        from_entity="A",
+        to_entity="B",
+        binding=BindingSpec(source="p.d.t2"),
+        properties=[PropertySpec(name="w", type="string")],
+    )
+    spec = GraphSpec(name="g", entities=[a, b], relationships=[r1, r2])
+    with pytest.raises(ValueError, match="Property name collision.*w"):
+      compile_output_schema(spec)
+
 
 # ------------------------------------------------------------------ #
 # compile_extraction_prompt                                            #
@@ -273,6 +368,8 @@ class TestCompileExtractionPrompt:
   def test_contains_rules(self):
     prompt = compile_extraction_prompt(_simple_spec())
     assert "Do not invent unknown entity types" in prompt
+    assert "from_keys" in prompt
+    assert "to_keys" in prompt
 
   def test_ends_with_payload_marker(self):
     prompt = compile_extraction_prompt(_simple_spec())

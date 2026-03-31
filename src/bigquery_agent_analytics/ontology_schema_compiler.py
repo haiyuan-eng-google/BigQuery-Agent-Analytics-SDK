@@ -103,8 +103,14 @@ def _compile_relationship_schema(rel: RelationshipSpec) -> dict:
       "relationship_name": {"type": "STRING"},
       "from_entity_name": {"type": "STRING"},
       "to_entity_name": {"type": "STRING"},
-      "from_key": {"type": "STRING"},
-      "to_key": {"type": "STRING"},
+      "from_keys": {
+          "type": "OBJECT",
+          "properties": {},
+      },
+      "to_keys": {
+          "type": "OBJECT",
+          "properties": {},
+      },
   }
   for prop in rel.properties:
     props[prop.name] = {"type": _bq_schema_type(prop.type)}
@@ -129,11 +135,17 @@ def compile_output_schema(
         ],
         "edges": [
           {"relationship_name": "...", "from_entity_name": "...",
-           "to_entity_name": "...", "from_key": "...", "to_key": "...",
+           "to_entity_name": "...",
+           "from_keys": {"col1": "val1", ...},
+           "to_keys": {"col1": "val1", ...},
            <typed properties>},
           ...
         ]
       }
+
+  ``from_keys`` and ``to_keys`` are typed OBJECT fields whose
+  properties match the source/target entity primary key columns.
+  This preserves composite keys for downstream routing/DDL phases.
 
   Args:
       spec: A validated ``GraphSpec``.
@@ -144,8 +156,9 @@ def compile_output_schema(
       A compact JSON string suitable for ``output_schema =>``.
 
   Raises:
-      ValueError: If an entity name is not found in the spec, or
-          a property type is unsupported.
+      ValueError: If an entity name is not found in the spec, a
+          property type is unsupported, or property names collide
+          with incompatible types across entities/relationships.
   """
   entity_map = {e.name: e for e in spec.entities}
 
@@ -171,21 +184,70 @@ def compile_output_schema(
   # BQ AI.GENERATE does not support anyOf, so we merge all entity
   # properties into a single flat object schema.  The entity_name
   # field disambiguates at hydration time.
+  #
+  # Collision detection: if the same property name appears with
+  # different types across entities, raise immediately.
   node_props: dict = {"entity_name": {"type": "STRING"}}
+  node_type_registry: dict[str, tuple[str, str]] = {}
   for entity in entities:
     for prop in entity.properties:
-      node_props[prop.name] = {"type": _bq_schema_type(prop.type)}
+      bq_type = _bq_schema_type(prop.type)
+      if prop.name in node_type_registry:
+        prev_type, prev_entity = node_type_registry[prop.name]
+        if prev_type != bq_type:
+          raise ValueError(
+              f"Property name collision: {prop.name!r} has type "
+              f"{prev_type} in entity {prev_entity!r} but type "
+              f"{bq_type} in entity {entity.name!r}."
+          )
+      node_type_registry[prop.name] = (bq_type, entity.name)
+      node_props[prop.name] = {"type": bq_type}
+
+  # Edge structural fields + composite key objects.
+  # from_keys/to_keys are typed per-relationship based on the
+  # source/target entity key columns.
+  from_key_props: dict = {}
+  to_key_props: dict = {}
+  for rel in relationships:
+    src = entity_map[rel.from_entity]
+    tgt = entity_map[rel.to_entity]
+    src_prop_map = {p.name: p for p in src.properties}
+    tgt_prop_map = {p.name: p for p in tgt.properties}
+    for col in src.keys.primary:
+      prop = src_prop_map[col]
+      from_key_props[col] = {"type": _bq_schema_type(prop.type)}
+    for col in tgt.keys.primary:
+      prop = tgt_prop_map[col]
+      to_key_props[col] = {"type": _bq_schema_type(prop.type)}
 
   edge_props: dict = {
       "relationship_name": {"type": "STRING"},
       "from_entity_name": {"type": "STRING"},
       "to_entity_name": {"type": "STRING"},
-      "from_key": {"type": "STRING"},
-      "to_key": {"type": "STRING"},
+      "from_keys": {
+          "type": "OBJECT",
+          "properties": from_key_props,
+      },
+      "to_keys": {
+          "type": "OBJECT",
+          "properties": to_key_props,
+      },
   }
+
+  edge_type_registry: dict[str, tuple[str, str]] = {}
   for rel in relationships:
     for prop in rel.properties:
-      edge_props[prop.name] = {"type": _bq_schema_type(prop.type)}
+      bq_type = _bq_schema_type(prop.type)
+      if prop.name in edge_type_registry:
+        prev_type, prev_rel = edge_type_registry[prop.name]
+        if prev_type != bq_type:
+          raise ValueError(
+              f"Property name collision: {prop.name!r} has type "
+              f"{prev_type} in relationship {prev_rel!r} but type "
+              f"{bq_type} in relationship {rel.name!r}."
+          )
+      edge_type_registry[prop.name] = (bq_type, rel.name)
+      edge_props[prop.name] = {"type": bq_type}
 
   schema = {
       "type": "OBJECT",
@@ -269,8 +331,8 @@ def compile_extraction_prompt(
           "Rules:",
           "- Only emit entity and relationship types declared above.",
           "- Populate all typed properties when present in the data.",
-          "- Set from_key / to_key to the primary key values of the "
-          "connected nodes.",
+          "- Set from_keys / to_keys to objects mapping each primary key "
+          "column name to its value for the connected nodes.",
           "- Do not invent unknown entity types.",
           "",
           "Payload:",
