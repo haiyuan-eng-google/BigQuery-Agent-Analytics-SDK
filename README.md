@@ -178,6 +178,31 @@ SELECT `my-project.agent_analytics.agent_analytics`(
 See [SDK.md](SDK.md) for the full CLI reference, Remote Function API,
 and continuous query templates.
 
+### Streaming Evaluation
+
+Deploy a dedicated Cloud Run worker that scans recent `agent_events`
+rows every `5` minutes through `Cloud Scheduler -> SDK -> BigQuery`:
+
+```mermaid
+flowchart LR
+  A["agent_events"] --> B["Cloud Scheduler"]
+  B --> C["Cloud Run worker"]
+  C --> D["overlap scan + dedupe + checkpoint"]
+  D --> E["streaming_evaluation_results"]
+```
+
+Quick start:
+
+```bash
+cd deploy/streaming_evaluation
+./setup.sh up my-project my_dataset agent_events us-central1
+```
+
+Use [deploy/streaming_evaluation/README.md](deploy/streaming_evaluation/README.md)
+for the full setup flow. This path intentionally avoids continuous-query
+reservations because they can be too expensive as a default deployment
+mode.
+
 ## Architecture
 
 ```
