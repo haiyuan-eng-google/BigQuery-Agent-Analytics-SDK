@@ -582,3 +582,264 @@ class TestBatchEvaluator:
     success = await evaluator.store_evaluation_results(results)
 
     assert success is False
+
+
+# ================================================================== #
+# AI Operator Migration Tests                                          #
+# ================================================================== #
+
+
+class TestAIEmbedMigration:
+  """Tests for AI.EMBED migration from ML.GENERATE_EMBEDDING."""
+
+  def test_ai_embed_query_template_exists(self):
+    """AI.EMBED query template is defined on BigQueryAIClient."""
+    assert hasattr(BigQueryAIClient, "_AI_EMBED_QUERY")
+    assert "AI.EMBED" in BigQueryAIClient._AI_EMBED_QUERY
+    assert "endpoint" in BigQueryAIClient._AI_EMBED_QUERY
+
+  def test_legacy_embedding_query_preserved(self):
+    """Legacy ML.GENERATE_EMBEDDING template is preserved."""
+    assert hasattr(BigQueryAIClient, "_LEGACY_GENERATE_EMBEDDING_QUERY")
+    assert (
+        "ML.GENERATE_EMBEDDING"
+        in BigQueryAIClient._LEGACY_GENERATE_EMBEDDING_QUERY
+    )
+
+  def test_default_embedding_endpoint(self):
+    """Default embedding endpoint is text-embedding-005."""
+    client = BigQueryAIClient(
+        project_id="p",
+        dataset_id="d",
+        client=MagicMock(),
+    )
+    assert client.embedding_endpoint == "text-embedding-005"
+    assert client.embedding_model is None
+
+  def test_custom_embedding_endpoint(self):
+    """Custom embedding endpoint is respected."""
+    client = BigQueryAIClient(
+        project_id="p",
+        dataset_id="d",
+        client=MagicMock(),
+        embedding_endpoint="text-multilingual-embedding-002",
+    )
+    assert client.embedding_endpoint == "text-multilingual-embedding-002"
+
+  def test_legacy_model_routes_to_ml_generate_embedding(self):
+    """When embedding_model is a BQ ML ref, uses legacy path."""
+    client = BigQueryAIClient(
+        project_id="p",
+        dataset_id="d",
+        client=MagicMock(),
+        embedding_model="p.d.text_embedding_model",
+    )
+    assert client.embedding_model == "p.d.text_embedding_model"
+
+  @pytest.mark.asyncio
+  async def test_generate_embeddings_uses_ai_embed_by_default(self):
+    """Default path uses AI.EMBED."""
+    mock_bq = MagicMock()
+    mock_job = MagicMock()
+    mock_job.result.return_value = [
+        {"content": "hello", "embedding": [0.1, 0.2]},
+    ]
+    mock_bq.query.return_value = mock_job
+
+    client = BigQueryAIClient(
+        project_id="p",
+        dataset_id="d",
+        client=mock_bq,
+    )
+    results = await client.generate_embeddings(["hello"])
+
+    assert len(results) == 1
+    query_str = mock_bq.query.call_args[0][0]
+    assert "AI.EMBED" in query_str
+    assert "ML.GENERATE_EMBEDDING" not in query_str
+
+  @pytest.mark.asyncio
+  async def test_generate_embeddings_uses_legacy_when_model_set(self):
+    """Legacy path is used when embedding_model is a BQ ML ref."""
+    mock_bq = MagicMock()
+    mock_job = MagicMock()
+    mock_job.result.return_value = [
+        {"content": "hello", "embedding": [0.1, 0.2]},
+    ]
+    mock_bq.query.return_value = mock_job
+
+    client = BigQueryAIClient(
+        project_id="p",
+        dataset_id="d",
+        client=mock_bq,
+        embedding_model="p.d.text_embedding_model",
+    )
+    results = await client.generate_embeddings(["hello"])
+
+    assert len(results) == 1
+    query_str = mock_bq.query.call_args[0][0]
+    assert "ML.GENERATE_EMBEDDING" in query_str
+    assert "AI.EMBED" not in query_str
+
+
+class TestEmbeddingSearchAIEmbedMigration:
+  """Tests for EmbeddingSearchClient AI.EMBED migration."""
+
+  def test_ai_embed_index_query_exists(self):
+    """AI.EMBED index query template is defined."""
+    assert hasattr(EmbeddingSearchClient, "_AI_EMBED_INDEX_QUERY")
+    assert "AI.EMBED" in EmbeddingSearchClient._AI_EMBED_INDEX_QUERY
+
+  def test_legacy_index_query_preserved(self):
+    """Legacy ML.GENERATE_EMBEDDING index template is preserved."""
+    assert hasattr(EmbeddingSearchClient, "_LEGACY_INDEX_EMBEDDINGS_QUERY")
+    assert "ML.GENERATE_EMBEDDING" in (
+        EmbeddingSearchClient._LEGACY_INDEX_EMBEDDINGS_QUERY
+    )
+
+  def test_default_uses_ai_embed(self):
+    """Default (no embedding_model) uses AI.EMBED endpoint."""
+    client = EmbeddingSearchClient(
+        project_id="p",
+        dataset_id="d",
+        client=MagicMock(),
+    )
+    assert client.embedding_model is None
+    assert client.embedding_endpoint == "text-embedding-005"
+
+  def test_legacy_model_set(self):
+    """When embedding_model is set, legacy path is used."""
+    client = EmbeddingSearchClient(
+        project_id="p",
+        dataset_id="d",
+        client=MagicMock(),
+        embedding_model="p.d.text_embedding_model",
+    )
+    assert client.embedding_model == "p.d.text_embedding_model"
+
+
+class TestAIDetectAnomaliesMigration:
+  """Tests for AI.DETECT_ANOMALIES migration from ML.DETECT_ANOMALIES."""
+
+  def test_ai_detect_anomalies_query_exists(self):
+    """AI.DETECT_ANOMALIES query template is defined."""
+    assert hasattr(AnomalyDetector, "_AI_DETECT_LATENCY_ANOMALIES_QUERY")
+    assert "AI.DETECT_ANOMALIES" in (
+        AnomalyDetector._AI_DETECT_LATENCY_ANOMALIES_QUERY
+    )
+    assert "anomaly_prob_threshold" in (
+        AnomalyDetector._AI_DETECT_LATENCY_ANOMALIES_QUERY
+    )
+    assert "timestamp_col" in (
+        AnomalyDetector._AI_DETECT_LATENCY_ANOMALIES_QUERY
+    )
+    assert "data_col" in (AnomalyDetector._AI_DETECT_LATENCY_ANOMALIES_QUERY)
+
+  def test_legacy_detect_anomalies_preserved(self):
+    """Legacy ML.DETECT_ANOMALIES template is preserved."""
+    assert hasattr(AnomalyDetector, "_LEGACY_DETECT_LATENCY_ANOMALIES_QUERY")
+    assert "ML.DETECT_ANOMALIES" in (
+        AnomalyDetector._LEGACY_DETECT_LATENCY_ANOMALIES_QUERY
+    )
+
+  def test_default_uses_ai_detect_anomalies(self):
+    """Default (use_legacy_anomaly_model=False) uses AI path."""
+    detector = AnomalyDetector(
+        project_id="p",
+        dataset_id="d",
+        client=MagicMock(),
+    )
+    assert detector.use_legacy_anomaly_model is False
+
+  def test_legacy_flag(self):
+    """use_legacy_anomaly_model=True selects ML path."""
+    detector = AnomalyDetector(
+        project_id="p",
+        dataset_id="d",
+        client=MagicMock(),
+        use_legacy_anomaly_model=True,
+    )
+    assert detector.use_legacy_anomaly_model is True
+
+  @pytest.mark.asyncio
+  async def test_train_skipped_for_ai_path(self):
+    """train_latency_model returns True immediately for AI path."""
+    detector = AnomalyDetector(
+        project_id="p",
+        dataset_id="d",
+        client=MagicMock(),
+    )
+    result = await detector.train_latency_model()
+    assert result is True
+    # Should NOT have called BigQuery
+    detector.client.query.assert_not_called()
+
+  @pytest.mark.asyncio
+  async def test_detect_uses_ai_by_default(self):
+    """detect_latency_anomalies uses AI.DETECT_ANOMALIES by default."""
+    mock_bq = MagicMock()
+    mock_job = MagicMock()
+    mock_job.result.return_value = [
+        {
+            "time_series_timestamp": datetime(
+                2026, 3, 31, 12, tzinfo=timezone.utc
+            ),
+            "time_series_data": 5000.0,
+            "is_anomaly": True,
+            "anomaly_probability": 0.98,
+            "lower_bound": 1000.0,
+            "upper_bound": 3000.0,
+        },
+    ]
+    mock_bq.query.return_value = mock_job
+
+    detector = AnomalyDetector(
+        project_id="p",
+        dataset_id="d",
+        client=mock_bq,
+    )
+    anomalies = await detector.detect_latency_anomalies(since_hours=24)
+
+    assert len(anomalies) == 1
+    assert anomalies[0].anomaly_type == AnomalyType.LATENCY_SPIKE
+    assert anomalies[0].severity == 0.98
+
+    query_str = mock_bq.query.call_args[0][0]
+    assert "AI.DETECT_ANOMALIES" in query_str
+    assert "ML.DETECT_ANOMALIES" not in query_str
+
+  @pytest.mark.asyncio
+  async def test_detect_uses_legacy_when_flag_set(self):
+    """detect_latency_anomalies uses ML.DETECT_ANOMALIES with flag."""
+    mock_bq = MagicMock()
+    mock_job = MagicMock()
+    mock_job.result.return_value = [
+        {
+            "hour": datetime(2026, 3, 31, 12, tzinfo=timezone.utc),
+            "avg_latency": 5000.0,
+            "is_anomaly": True,
+            "anomaly_probability": 0.97,
+            "lower_bound": 1000.0,
+            "upper_bound": 3000.0,
+        },
+    ]
+    mock_bq.query.return_value = mock_job
+
+    detector = AnomalyDetector(
+        project_id="p",
+        dataset_id="d",
+        client=mock_bq,
+        use_legacy_anomaly_model=True,
+    )
+    anomalies = await detector.detect_latency_anomalies(since_hours=24)
+
+    assert len(anomalies) == 1
+    query_str = mock_bq.query.call_args[0][0]
+    assert "ML.DETECT_ANOMALIES" in query_str
+
+  def test_behavior_anomaly_still_uses_ml(self):
+    """Behavioral anomaly detection still uses ML.DETECT_ANOMALIES."""
+    assert "ML.DETECT_ANOMALIES" in (
+        AnomalyDetector._DETECT_BEHAVIOR_ANOMALIES_QUERY
+    )
+    assert "AUTOENCODER" in AnomalyDetector._CREATE_BEHAVIOR_MODEL_QUERY

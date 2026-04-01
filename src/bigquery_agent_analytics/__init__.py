@@ -24,7 +24,8 @@ stored in BigQuery, including:
 5. **Agent Insights** - Multi-stage pipeline for comprehensive session analysis.
 6. **Trace-Based Evaluation Harness** - Trajectory metrics and replay.
 7. **Long-Horizon Agent Memory** - Cross-session context and semantic search.
-8. **BigQuery AI/ML Integration** - AI.GENERATE, AI.EMBED, ML.DETECT_ANOMALIES.
+8. **BigQuery AI/ML Integration** - AI.GENERATE, AI.EMBED,
+   AI.DETECT_ANOMALIES, with legacy ML.* fallbacks.
 
 Quick start::
 

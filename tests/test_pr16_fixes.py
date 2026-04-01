@@ -455,7 +455,10 @@ class TestResponseSourceOrder:
   def test_ai_ml_index_query_includes_llm_response(self):
     from bigquery_agent_analytics.ai_ml_integration import EmbeddingSearchClient
 
-    assert "LLM_RESPONSE" in EmbeddingSearchClient._INDEX_EMBEDDINGS_QUERY
+    assert "LLM_RESPONSE" in EmbeddingSearchClient._AI_EMBED_INDEX_QUERY
+    assert (
+        "LLM_RESPONSE" in EmbeddingSearchClient._LEGACY_INDEX_EMBEDDINGS_QUERY
+    )
 
 
 # ================================================================== #
@@ -471,6 +474,13 @@ class TestSemanticDrift:
 
     assert "ML.GENERATE_EMBEDDING" in _SEMANTIC_DRIFT_QUERY
     assert "ML.DISTANCE" in _SEMANTIC_DRIFT_QUERY
+
+  def test_ai_embed_semantic_drift_query_exists(self):
+    from bigquery_agent_analytics.feedback import _AI_EMBED_SEMANTIC_DRIFT_QUERY
+
+    assert "AI.EMBED" in _AI_EMBED_SEMANTIC_DRIFT_QUERY
+    assert "ML.DISTANCE" in _AI_EMBED_SEMANTIC_DRIFT_QUERY
+    assert "ML.GENERATE_EMBEDDING" not in _AI_EMBED_SEMANTIC_DRIFT_QUERY
 
   def test_semantic_drift_function_exists(self):
     from bigquery_agent_analytics.feedback import _semantic_drift

@@ -18,6 +18,10 @@
 -- then writes to a sink table.  No GROUP BY or aggregation — each row
 -- is processed independently, which is the continuous-query requirement.
 --
+-- NOTE: This query uses AI.GENERATE_TEXT (table-valued function) rather
+-- than AI.GENERATE (scalar function) because continuous queries using
+-- APPENDS() require the table-valued function form with a MODEL reference.
+--
 -- Prerequisites:
 --   1. Enterprise reservation (see setup_reservation.md)
 --   2. BQ connection with Vertex AI access
