@@ -27,7 +27,9 @@ capabilities:
   ``use_legacy_anomaly_model`` is True.
 - ML.DETECT_ANOMALIES: Behavioral anomaly detection via AUTOENCODER
   (requires model training — no AI Operator equivalent).
-- ML.DISTANCE: Vector distance computation (no AI Operator equivalent).
+- ML.DISTANCE: Vector distance computation for pre-computed embeddings.
+    AI.SIMILARITY exists for text-to-text comparison but re-embeds per call,
+    making it O(N×M) in cross joins vs O(N+M) with AI.EMBED + ML.DISTANCE.
 - Batch evaluation using BigQuery's high-throughput ML inference
 
 Example usage:
