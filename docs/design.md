@@ -265,7 +265,7 @@ Client(
     project_id: str,              # GCP project
     dataset_id: str,              # BigQuery dataset
     table_id: str = "agent_events",
-    location: str = "us-central1",
+    location: str | None = None,  # BQ location; None lets the client auto-detect
     gcs_bucket_name: str | None,  # For GCS-offloaded payload access
     verify_schema: bool = True,   # Schema validation on init
     endpoint: str | None,         # AI.GENERATE endpoint

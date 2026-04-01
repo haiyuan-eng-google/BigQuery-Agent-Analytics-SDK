@@ -117,8 +117,11 @@ graph:
   works across dev/staging/prod environments.
 - **Label inheritance** (`extends`) — an entity can carry multiple labels
   in the graph (e.g., `YahooAdUnit` is also a `Candidate`).
-- **Explicit key routing** — `from_columns` / `to_columns` control exactly
-  how edges reference nodes, supporting composite keys.
+- **Explicit key routing** — `from_columns` / `to_columns` define how edge
+  tables reference source and target nodes. For Property Graph compilation,
+  these must exactly match the referenced entity's full primary key;
+  subset bindings are supported for table materialization but will be
+  rejected by the DDL transpiler.
 
 ### Example: Yahoo ADCP Ad Decisioning
 
