@@ -53,6 +53,8 @@ from typing import Any, Optional
 
 from google.cloud import bigquery
 
+from .categorical_evaluator import build_ai_classify_query
+from .categorical_evaluator import build_ai_generate_query
 from .categorical_evaluator import build_categorical_prompt
 from .categorical_evaluator import build_categorical_report
 from .categorical_evaluator import CATEGORICAL_AI_GENERATE_QUERY
@@ -64,6 +66,7 @@ from .categorical_evaluator import classify_sessions_via_api
 from .categorical_evaluator import DEFAULT_RESULTS_TABLE
 from .categorical_evaluator import flatten_results_to_rows
 from .categorical_evaluator import parse_categorical_row
+from .categorical_evaluator import parse_classify_row
 from .evaluators import _parse_json_from_text
 from .evaluators import AI_GENERATE_JUDGE_BATCH_QUERY
 from .evaluators import CodeEvaluator
@@ -1177,9 +1180,12 @@ class Client:
   ) -> CategoricalEvaluationReport:
     """Runs categorical evaluation over traces.
 
-    Classifies agent sessions into user-defined categories using
-    BigQuery's native ``AI.GENERATE``.  Falls back to the Gemini
-    API when ``AI.GENERATE`` is unavailable or fails.
+    Execution cascade:
+
+    * When ``include_justification=False``:
+      AI.CLASSIFY → AI.GENERATE → Gemini API
+    * When ``include_justification=True`` (default):
+      AI.GENERATE → Gemini API
 
     Args:
         config: Categorical evaluation configuration with metric
@@ -1207,10 +1213,42 @@ class Client:
     else:
       endpoint = self.endpoint
 
+    # Resolve connection_id: config wins over client.
+    connection_id = config.connection_id or self.connection_id
+
     table_ref = f"{self.project_id}.{self.dataset_id}.{table}"
+    classify_fallback_reason = None
     fallback_reason = None
 
-    # Try AI.GENERATE first.
+    # When justification is not needed, try AI.CLASSIFY first.
+    if not config.include_justification:
+      try:
+        session_results, classify_null_count = self._categorical_ai_classify(
+            config,
+            table,
+            where,
+            params,
+            endpoint,
+            connection_id,
+        )
+        report = build_categorical_report(
+            dataset=f"{table_ref} WHERE {where}",
+            session_results=session_results,
+            config=config,
+        )
+        report.details["execution_mode"] = "ai_classify"
+        report.details["classify_null_count"] = classify_null_count
+        self._persist_categorical_if_configured(report, config, endpoint)
+        return report
+      except Exception as e:
+        logger.debug(
+            "AI.CLASSIFY categorical failed, falling back to "
+            "AI.GENERATE: %s",
+            e,
+        )
+        classify_fallback_reason = str(e)
+
+    # Try AI.GENERATE.
     try:
       session_results = self._categorical_ai_generate(
           config,
@@ -1218,6 +1256,7 @@ class Client:
           where,
           params,
           endpoint,
+          connection_id,
       )
       report = build_categorical_report(
           dataset=f"{table_ref} WHERE {where}",
@@ -1225,6 +1264,8 @@ class Client:
           config=config,
       )
       report.details["execution_mode"] = "ai_generate"
+      if classify_fallback_reason:
+        report.details["classify_fallback_reason"] = classify_fallback_reason
       self._persist_categorical_if_configured(report, config, endpoint)
       return report
     except Exception as e:
@@ -1250,6 +1291,8 @@ class Client:
       )
       report.details["execution_mode"] = "api_fallback"
       report.details["fallback_reason"] = fallback_reason
+      if classify_fallback_reason:
+        report.details["classify_fallback_reason"] = classify_fallback_reason
       self._persist_categorical_if_configured(report, config, endpoint)
       return report
     except ImportError:
@@ -1264,6 +1307,46 @@ class Client:
       report.details["api_error"] = "google-genai not installed"
       return report
 
+  def _categorical_ai_classify(
+      self,
+      config: CategoricalEvaluationConfig,
+      table: str,
+      where: str,
+      params: list,
+      endpoint: str,
+      connection_id: Optional[str] = None,
+  ) -> tuple[list, int]:
+    """Classifies sessions using BigQuery AI.CLASSIFY.
+
+    Returns:
+        Tuple of (session_results, total_null_count).
+    """
+    query = build_ai_classify_query(
+        config=config,
+        project=self.project_id,
+        dataset=self.dataset_id,
+        table=table,
+        where=where,
+        endpoint=endpoint,
+        connection_id=connection_id,
+    )
+
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=list(params),
+    )
+
+    results = list(self.bq_client.query(query, job_config=job_config).result())
+
+    session_results = []
+    total_null_count = 0
+    for row in results:
+      r = dict(row)
+      sid = r.get("session_id", "unknown")
+      sr, null_count = parse_classify_row(sid, r, config)
+      session_results.append(sr)
+      total_null_count += null_count
+    return session_results, total_null_count
+
   def _categorical_ai_generate(
       self,
       config: CategoricalEvaluationConfig,
@@ -1271,17 +1354,19 @@ class Client:
       where: str,
       params: list,
       endpoint: str,
+      connection_id: Optional[str] = None,
   ) -> list:
     """Classifies sessions using BigQuery AI.GENERATE."""
     prompt = build_categorical_prompt(config)
 
-    query = CATEGORICAL_AI_GENERATE_QUERY.format(
+    query = build_ai_generate_query(
         project=self.project_id,
         dataset=self.dataset_id,
         table=table,
         where=where,
         endpoint=endpoint,
         temperature=config.temperature,
+        connection_id=connection_id,
     )
 
     query_params = list(params) + [

@@ -1340,6 +1340,36 @@ class TestCategoricalEval:
     )
     assert result.exit_code == 2
 
+  @patch("bigquery_agent_analytics.cli._build_client")
+  def test_categorical_eval_connection_id_passthrough(
+      self, mock_build, tmp_path
+  ):
+    """--connection-id should be passed to _build_client() and config."""
+    client = MagicMock()
+    client.evaluate_categorical.return_value = _mock_categorical_report()
+    mock_build.return_value = client
+    metrics_path = self._write_metrics(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "categorical-eval",
+            "--project-id=proj",
+            "--dataset-id=ds",
+            f"--metrics-file={metrics_path}",
+            "--connection-id=proj.us.conn",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    # Verify passed to _build_client.
+    build_kwargs = mock_build.call_args
+    assert build_kwargs[1].get("connection_id") == "proj.us.conn"
+
+    # Verify passed to config.
+    call_kwargs = client.evaluate_categorical.call_args[1]
+    assert call_kwargs["config"].connection_id == "proj.us.conn"
+
 
 # ------------------------------------------------------------------ #
 # categorical-views                                                    #

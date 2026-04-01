@@ -546,6 +546,10 @@ def categorical_eval(
         None,
         help="Model endpoint for classification.",
     ),
+    connection_id: Optional[str] = typer.Option(
+        None,
+        help="BQ connection ID for AI.CLASSIFY / AI.GENERATE.",
+    ),
     include_justification: bool = typer.Option(
         True,
         help="Include justification in output.",
@@ -606,6 +610,8 @@ def categorical_eval(
     }
     if endpoint is not None:
       config_kwargs["endpoint"] = endpoint
+    if connection_id is not None:
+      config_kwargs["connection_id"] = connection_id
     if results_table is not None:
       config_kwargs["results_table"] = results_table
     if prompt_version is not None:
@@ -624,6 +630,7 @@ def categorical_eval(
         table_id,
         location,
         endpoint=endpoint,
+        connection_id=connection_id,
     )
     report = client.evaluate_categorical(config=config, filters=filters)
     typer.echo(format_output(report, fmt))

@@ -119,6 +119,10 @@ class CategoricalEvaluationConfig(BaseModel):
       default=None,
       description="Destination table for results.",
   )
+  connection_id: Optional[str] = Field(
+      default=None,
+      description="BQ connection ID for AI.CLASSIFY / AI.GENERATE.",
+  )
   include_justification: bool = Field(
       default=True,
       description="Include justification in output.",
@@ -277,6 +281,254 @@ SELECT
   )).classifications AS classifications
 FROM session_transcripts
 """
+
+
+# ------------------------------------------------------------------ #
+# SQL Escape Helper                                                    #
+# ------------------------------------------------------------------ #
+
+
+def _escape_sql_string_literal(value: str) -> str:
+  """Doubles single quotes for safe embedding in SQL string literals."""
+  return value.replace("'", "''")
+
+
+# ------------------------------------------------------------------ #
+# AI.CLASSIFY Query Builder                                            #
+# ------------------------------------------------------------------ #
+
+
+def build_classify_categories_literal(
+    metric: CategoricalMetricDefinition,
+) -> str:
+  """Builds a SQL array literal for AI.CLASSIFY categories.
+
+  Returns:
+      SQL literal like ``[('label1', 'def1'), ('label2', 'def2')]``.
+  """
+  pairs = []
+  for cat in metric.categories:
+    name = _escape_sql_string_literal(cat.name)
+    defn = _escape_sql_string_literal(cat.definition)
+    pairs.append(f"('{name}', '{defn}')")
+  return "[" + ", ".join(pairs) + "]"
+
+
+def build_ai_classify_query(
+    config: CategoricalEvaluationConfig,
+    project: str,
+    dataset: str,
+    table: str,
+    where: str,
+    endpoint: Optional[str] = None,
+    connection_id: Optional[str] = None,
+) -> str:
+  """Builds a BigQuery SQL query using AI.CLASSIFY.
+
+  One AI.CLASSIFY column per metric in a single SELECT.
+  Column names ``classify_0``, ``classify_1``, ... map by index
+  to ``config.metrics[0]``, ``config.metrics[1]``, ...
+
+  Args:
+      config: Categorical evaluation config.
+      project: GCP project ID.
+      dataset: BigQuery dataset.
+      table: Events table name.
+      where: SQL WHERE clause.
+      endpoint: Optional model endpoint.
+      connection_id: Optional BQ connection ID.
+
+  Returns:
+      Complete SQL query string.
+  """
+  optional_params = []
+  if connection_id:
+    optional_params.append(
+        f"    connection_id => '{_escape_sql_string_literal(connection_id)}'"
+    )
+  if endpoint:
+    optional_params.append(
+        f"    endpoint => '{_escape_sql_string_literal(endpoint)}'"
+    )
+
+  classify_columns = []
+  for i, metric in enumerate(config.metrics):
+    cats_literal = build_classify_categories_literal(metric)
+    parts = [f"    categories => {cats_literal}"]
+    parts.extend(optional_params)
+    args_str = ",\n".join(parts)
+    classify_columns.append(
+        f"  AI.CLASSIFY(\n    transcript,\n{args_str}\n  ) AS classify_{i}"
+    )
+
+  columns_sql = ",\n".join(classify_columns)
+
+  return f"""\
+WITH session_transcripts AS (
+  SELECT
+    session_id,
+    STRING_AGG(
+      CONCAT(
+        event_type,
+        COALESCE(CONCAT(' [', agent, ']'), ''),
+        ': ',
+        COALESCE(
+          JSON_VALUE(content, '$.text_summary'),
+          JSON_VALUE(content, '$.response'),
+          JSON_VALUE(content, '$.tool'),
+          ''
+        )
+      ),
+      '\\n' ORDER BY timestamp
+    ) AS transcript
+  FROM `{project}.{dataset}.{table}`
+  WHERE {where}
+  GROUP BY session_id
+  HAVING LENGTH(transcript) > 10
+  LIMIT @trace_limit
+)
+SELECT
+  session_id,
+  transcript,
+{columns_sql}
+FROM session_transcripts
+"""
+
+
+# ------------------------------------------------------------------ #
+# AI.GENERATE Query Builder                                            #
+# ------------------------------------------------------------------ #
+
+
+def build_ai_generate_query(
+    project: str,
+    dataset: str,
+    table: str,
+    where: str,
+    endpoint: str,
+    temperature: float,
+    connection_id: Optional[str] = None,
+) -> str:
+  """Builds the AI.GENERATE categorical classification query.
+
+  Same body as ``CATEGORICAL_AI_GENERATE_QUERY`` but conditionally
+  includes ``connection_id`` when provided.
+
+  Args:
+      project: GCP project ID.
+      dataset: BigQuery dataset.
+      table: Events table name.
+      where: SQL WHERE clause.
+      endpoint: Model endpoint.
+      temperature: Sampling temperature.
+      connection_id: Optional BQ connection ID.
+
+  Returns:
+      Complete SQL query string.
+  """
+  connection_clause = ""
+  if connection_id:
+    escaped = _escape_sql_string_literal(connection_id)
+    connection_clause = f"\n    connection_id => '{escaped}',"
+
+  return f"""\
+WITH session_transcripts AS (
+  SELECT
+    session_id,
+    STRING_AGG(
+      CONCAT(
+        event_type,
+        COALESCE(CONCAT(' [', agent, ']'), ''),
+        ': ',
+        COALESCE(
+          JSON_VALUE(content, '$.text_summary'),
+          JSON_VALUE(content, '$.response'),
+          JSON_VALUE(content, '$.tool'),
+          ''
+        )
+      ),
+      '\\n' ORDER BY timestamp
+    ) AS transcript
+  FROM `{project}.{dataset}.{table}`
+  WHERE {where}
+  GROUP BY session_id
+  HAVING LENGTH(transcript) > 10
+  LIMIT @trace_limit
+)
+SELECT
+  session_id,
+  transcript,
+  (AI.GENERATE(
+    CONCAT(
+      @categorical_prompt,
+      '\\n\\nTranscript:\\n', transcript
+    ),{connection_clause}
+    endpoint => '{_escape_sql_string_literal(endpoint)}',
+    model_params => JSON '{{"generationConfig": {{"temperature": {temperature}, "maxOutputTokens": 1024}}}}',
+    output_schema => 'classifications STRING'
+  )).classifications AS classifications
+FROM session_transcripts
+"""
+
+
+# ------------------------------------------------------------------ #
+# AI.CLASSIFY Row Parser                                               #
+# ------------------------------------------------------------------ #
+
+
+def parse_classify_row(
+    session_id: str,
+    row: dict[str, Any],
+    config: CategoricalEvaluationConfig,
+) -> tuple[CategoricalSessionResult, int]:
+  """Parses a BigQuery AI.CLASSIFY result row.
+
+  AI.CLASSIFY returns the exact category label or NULL.
+  No JSON parsing or category validation needed.
+
+  Args:
+      session_id: The session ID.
+      row: Dict from ``dict(bigquery_row)`` with ``classify_N`` columns.
+      config: Evaluation config with metric definitions.
+
+  Returns:
+      Tuple of (CategoricalSessionResult, null_count) where
+      null_count is the number of NULL classify results
+      (execution failures, NOT parse errors).
+  """
+  metrics = []
+  null_count = 0
+
+  for i, metric in enumerate(config.metrics):
+    col_name = f"classify_{i}"
+    value = row.get(col_name)
+
+    if value is not None:
+      metrics.append(
+          CategoricalMetricResult(
+              metric_name=metric.name,
+              category=value,
+              passed_validation=True,
+              parse_error=False,
+              raw_response=value,
+          )
+      )
+    else:
+      null_count += 1
+      metrics.append(
+          CategoricalMetricResult(
+              metric_name=metric.name,
+              category=None,
+              passed_validation=False,
+              parse_error=False,
+              raw_response=None,
+          )
+      )
+
+  return (
+      CategoricalSessionResult(session_id=session_id, metrics=metrics),
+      null_count,
+  )
 
 
 # ------------------------------------------------------------------ #

@@ -1543,6 +1543,220 @@ class TestEvaluateCategoricalPersistence:
 
 
 # ------------------------------------------------------------------ #
+# AI.CLASSIFY in evaluate_categorical                                  #
+# ------------------------------------------------------------------ #
+
+
+class TestEvaluateCategoricalAiClassify:
+  """Tests for AI.CLASSIFY integration in evaluate_categorical."""
+
+  def test_ai_classify_used_when_no_justification(self):
+    """When include_justification=False, SQL should use AI.CLASSIFY."""
+    mock_bq = _mock_bq_client()
+    mock_bq.query.return_value.result.return_value = iter([])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    config = _make_categorical_config(include_justification=False)
+    report = client.evaluate_categorical(config=config)
+
+    sql = mock_bq.query.call_args[0][0]
+    assert "AI.CLASSIFY" in sql
+    assert report.details["execution_mode"] == "ai_classify"
+
+  def test_ai_classify_skipped_when_justification_true(self):
+    """When include_justification=True, SQL should use AI.GENERATE."""
+    mock_bq = _mock_bq_client()
+    mock_bq.query.return_value.result.return_value = iter([])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    config = _make_categorical_config(include_justification=True)
+    report = client.evaluate_categorical(config=config)
+
+    sql = mock_bq.query.call_args[0][0]
+    assert "AI.GENERATE" in sql
+    assert "AI.CLASSIFY" not in sql
+    assert report.details["execution_mode"] == "ai_generate"
+
+  def test_ai_classify_failure_falls_back_to_ai_generate(self):
+    """When AI.CLASSIFY fails, should fall back to AI.GENERATE."""
+    mock_bq = _mock_bq_client()
+
+    call_count = [0]
+
+    def query_side_effect(*args, **kwargs):
+      call_count[0] += 1
+      result = MagicMock()
+      if call_count[0] == 1:
+        # AI.CLASSIFY fails.
+        result.result.side_effect = Exception("AI.CLASSIFY not available")
+      else:
+        # AI.GENERATE succeeds.
+        result.result.return_value = iter([])
+      return result
+
+    mock_bq.query.side_effect = query_side_effect
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    config = _make_categorical_config(include_justification=False)
+    report = client.evaluate_categorical(config=config)
+
+    assert report.details["execution_mode"] == "ai_generate"
+    assert (
+        "AI.CLASSIFY not available"
+        in report.details["classify_fallback_reason"]
+    )
+
+  def test_ai_classify_and_generate_both_fail_falls_back_to_api(self):
+    """When both AI.CLASSIFY and AI.GENERATE fail, falls back to API."""
+    mock_bq = _mock_bq_client()
+
+    call_count = [0]
+
+    def query_side_effect(*args, **kwargs):
+      call_count[0] += 1
+      result = MagicMock()
+      if call_count[0] <= 2:
+        # AI.CLASSIFY and AI.GENERATE both fail.
+        result.result.side_effect = Exception(f"step {call_count[0]} failed")
+      else:
+        # Transcript fetch for API fallback succeeds.
+        result.result.return_value = iter(
+            [{"session_id": "s1", "transcript": "USER: Hello"}]
+        )
+      return result
+
+    mock_bq.query.side_effect = query_side_effect
+
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    config = _make_categorical_config(include_justification=False)
+
+    with patch(
+        "bigquery_agent_analytics.client.classify_sessions_via_api",
+    ) as mock_api:
+      from bigquery_agent_analytics.categorical_evaluator import CategoricalMetricResult
+      from bigquery_agent_analytics.categorical_evaluator import CategoricalSessionResult
+
+      async def fake_api(transcripts, config, endpoint):
+        return [
+            CategoricalSessionResult(
+                session_id="s1",
+                metrics=[
+                    CategoricalMetricResult(
+                        metric_name=m.name,
+                        category=m.categories[0].name,
+                    )
+                    for m in config.metrics
+                ],
+            )
+        ]
+
+      mock_api.side_effect = fake_api
+      report = client.evaluate_categorical(config=config)
+
+    assert report.details["execution_mode"] == "api_fallback"
+
+  def test_ai_classify_persists_correct_execution_mode(self):
+    """execution_mode should be 'ai_classify' when AI.CLASSIFY succeeds."""
+    mock_bq = _mock_bq_client()
+    row = {
+        "session_id": "s1",
+        "transcript": "USER: Hello",
+        "classify_0": "positive",
+    }
+    mock_bq.query.return_value.result.return_value = iter([row])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    config = _make_categorical_config(include_justification=False)
+    report = client.evaluate_categorical(config=config)
+
+    assert report.details["execution_mode"] == "ai_classify"
+    assert report.total_sessions == 1
+
+  def test_ai_classify_null_tracked_separately_from_parse_errors(self):
+    """NULL results from AI.CLASSIFY should be tracked as
+    classify_null_count, not as parse_errors."""
+    mock_bq = _mock_bq_client()
+    row = {
+        "session_id": "s1",
+        "transcript": "USER: Hello",
+        "classify_0": None,
+    }
+    mock_bq.query.return_value.result.return_value = iter([row])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+    )
+    config = _make_categorical_config(include_justification=False)
+    report = client.evaluate_categorical(config=config)
+
+    assert report.details["classify_null_count"] == 1
+    # NULL is not a parse error — it's an execution failure.
+    assert report.details["parse_errors"] == 0
+
+  def test_ai_generate_fallback_uses_connection_id(self):
+    """connection_id should appear in AI.GENERATE SQL when set."""
+    mock_bq = _mock_bq_client()
+    mock_bq.query.return_value.result.return_value = iter([])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+        connection_id="proj.us.conn",
+    )
+    config = _make_categorical_config(include_justification=True)
+    report = client.evaluate_categorical(config=config)
+
+    sql = mock_bq.query.call_args[0][0]
+    assert "connection_id => 'proj.us.conn'" in sql
+
+  def test_config_connection_id_overrides_client(self):
+    """config.connection_id should take precedence over client."""
+    mock_bq = _mock_bq_client()
+    mock_bq.query.return_value.result.return_value = iter([])
+    client = Client(
+        project_id="proj",
+        dataset_id="ds",
+        verify_schema=False,
+        bq_client=mock_bq,
+        connection_id="proj.us.client_conn",
+    )
+    config = _make_categorical_config(
+        include_justification=False,
+        connection_id="proj.us.config_conn",
+    )
+    report = client.evaluate_categorical(config=config)
+
+    sql = mock_bq.query.call_args[0][0]
+    assert "proj.us.config_conn" in sql
+    assert "proj.us.client_conn" not in sql
+
+
+# ------------------------------------------------------------------ #
 # create_categorical_views                                             #
 # ------------------------------------------------------------------ #
 

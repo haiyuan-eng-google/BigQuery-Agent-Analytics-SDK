@@ -22,8 +22,11 @@ from unittest.mock import patch
 
 import pytest
 
+from bigquery_agent_analytics.categorical_evaluator import build_ai_classify_query
+from bigquery_agent_analytics.categorical_evaluator import build_ai_generate_query
 from bigquery_agent_analytics.categorical_evaluator import build_categorical_prompt
 from bigquery_agent_analytics.categorical_evaluator import build_categorical_report
+from bigquery_agent_analytics.categorical_evaluator import build_classify_categories_literal
 from bigquery_agent_analytics.categorical_evaluator import CATEGORICAL_AI_GENERATE_QUERY
 from bigquery_agent_analytics.categorical_evaluator import CATEGORICAL_RESULTS_DDL
 from bigquery_agent_analytics.categorical_evaluator import CATEGORICAL_TRANSCRIPT_QUERY
@@ -37,6 +40,7 @@ from bigquery_agent_analytics.categorical_evaluator import classify_sessions_via
 from bigquery_agent_analytics.categorical_evaluator import flatten_results_to_rows
 from bigquery_agent_analytics.categorical_evaluator import parse_categorical_row
 from bigquery_agent_analytics.categorical_evaluator import parse_classifications
+from bigquery_agent_analytics.categorical_evaluator import parse_classify_row
 
 # ------------------------------------------------------------------ #
 # Helpers                                                              #
@@ -922,3 +926,319 @@ class TestFlattenResultsToRows:
     assert len(rows) == 4
     session_ids = [r["session_id"] for r in rows]
     assert session_ids == ["s1", "s1", "s2", "s2"]
+
+
+# ------------------------------------------------------------------ #
+# build_classify_categories_literal Tests                              #
+# ------------------------------------------------------------------ #
+
+
+class TestBuildClassifyCategoriesLiteral:
+  """Tests for build_classify_categories_literal."""
+
+  def test_basic_format(self):
+    metric = CategoricalMetricDefinition(
+        name="tone",
+        definition="Tone.",
+        categories=[
+            CategoricalMetricCategory(
+                name="positive", definition="User is satisfied."
+            ),
+            CategoricalMetricCategory(
+                name="negative", definition="User is frustrated."
+            ),
+        ],
+    )
+    result = build_classify_categories_literal(metric)
+    assert result == (
+        "[('positive', 'User is satisfied.'), "
+        "('negative', 'User is frustrated.')]"
+    )
+
+  def test_single_category(self):
+    metric = CategoricalMetricDefinition(
+        name="safety",
+        definition="Safety.",
+        categories=[
+            CategoricalMetricCategory(name="safe", definition="OK."),
+        ],
+    )
+    result = build_classify_categories_literal(metric)
+    assert result == "[('safe', 'OK.')]"
+
+  def test_sql_quote_escaping(self):
+    metric = CategoricalMetricDefinition(
+        name="tone",
+        definition="Tone.",
+        categories=[
+            CategoricalMetricCategory(
+                name="it's good",
+                definition="User's satisfied.",
+            ),
+        ],
+    )
+    result = build_classify_categories_literal(metric)
+    assert "it''s good" in result
+    assert "User''s satisfied." in result
+
+  def test_empty_categories(self):
+    metric = CategoricalMetricDefinition(
+        name="tone",
+        definition="Tone.",
+        categories=[],
+    )
+    result = build_classify_categories_literal(metric)
+    assert result == "[]"
+
+
+# ------------------------------------------------------------------ #
+# build_ai_classify_query Tests                                        #
+# ------------------------------------------------------------------ #
+
+
+class TestBuildAiClassifyQuery:
+  """Tests for build_ai_classify_query."""
+
+  def test_contains_ai_classify(self):
+    config = _make_config(include_justification=False)
+    sql = build_ai_classify_query(
+        config, "p", "d", "t", "1=1", endpoint="gemini-2.5-flash"
+    )
+    assert "AI.CLASSIFY" in sql
+
+  def test_one_column_per_metric(self):
+    config = _make_config(include_justification=False)
+    sql = build_ai_classify_query(
+        config, "p", "d", "t", "1=1", endpoint="gemini-2.5-flash"
+    )
+    assert "classify_0" in sql
+    assert "classify_1" in sql
+
+  def test_categories_in_sql(self):
+    config = _make_config(include_justification=False)
+    sql = build_ai_classify_query(
+        config, "p", "d", "t", "1=1", endpoint="gemini-2.5-flash"
+    )
+    assert "('positive', 'User is satisfied.')" in sql
+    assert "('safe', 'Response is safe.')" in sql
+
+  def test_connection_id_in_sql(self):
+    config = _make_config(include_justification=False)
+    sql = build_ai_classify_query(
+        config,
+        "p",
+        "d",
+        "t",
+        "1=1",
+        endpoint="gemini-2.5-flash",
+        connection_id="proj.us.conn",
+    )
+    assert "connection_id => 'proj.us.conn'" in sql
+
+  def test_endpoint_in_sql(self):
+    config = _make_config(include_justification=False)
+    sql = build_ai_classify_query(
+        config, "p", "d", "t", "1=1", endpoint="gemini-2.5-flash"
+    )
+    assert "endpoint => 'gemini-2.5-flash'" in sql
+
+  def test_both_connection_and_endpoint(self):
+    config = _make_config(include_justification=False)
+    sql = build_ai_classify_query(
+        config,
+        "p",
+        "d",
+        "t",
+        "1=1",
+        endpoint="gemini-2.5-flash",
+        connection_id="proj.us.conn",
+    )
+    assert "connection_id => 'proj.us.conn'" in sql
+    assert "endpoint => 'gemini-2.5-flash'" in sql
+
+  def test_neither_connection_nor_endpoint(self):
+    config = _make_config(include_justification=False)
+    sql = build_ai_classify_query(config, "p", "d", "t", "1=1")
+    assert "connection_id =>" not in sql
+    assert "endpoint =>" not in sql
+
+  def test_uses_transcript_cte(self):
+    config = _make_config(include_justification=False)
+    sql = build_ai_classify_query(
+        config, "p", "d", "t", "1=1", endpoint="gemini-2.5-flash"
+    )
+    assert "session_transcripts" in sql
+    assert "STRING_AGG" in sql
+
+  def test_contains_trace_limit(self):
+    config = _make_config(include_justification=False)
+    sql = build_ai_classify_query(
+        config, "p", "d", "t", "1=1", endpoint="gemini-2.5-flash"
+    )
+    assert "@trace_limit" in sql
+
+
+# ------------------------------------------------------------------ #
+# build_ai_generate_query Tests                                        #
+# ------------------------------------------------------------------ #
+
+
+class TestBuildAiGenerateQuery:
+  """Tests for build_ai_generate_query."""
+
+  def test_with_connection_id(self):
+    sql = build_ai_generate_query(
+        "p",
+        "d",
+        "t",
+        "1=1",
+        "gemini-2.5-flash",
+        0.0,
+        connection_id="proj.us.conn",
+    )
+    assert "connection_id => 'proj.us.conn'" in sql
+    assert "AI.GENERATE" in sql
+
+  def test_without_connection_id_matches_original(self):
+    sql = build_ai_generate_query(
+        "p",
+        "d",
+        "t",
+        "1=1",
+        "gemini-2.5-flash",
+        0.0,
+    )
+    assert "connection_id =>" not in sql
+    assert "AI.GENERATE" in sql
+    assert "endpoint => 'gemini-2.5-flash'" in sql
+    assert "classifications STRING" in sql
+
+  def test_endpoint_is_escaped(self):
+    sql = build_ai_generate_query(
+        "p",
+        "d",
+        "t",
+        "1=1",
+        "it's-a-model",
+        0.0,
+    )
+    assert "it''s-a-model" in sql
+
+
+# ------------------------------------------------------------------ #
+# parse_classify_row Tests                                             #
+# ------------------------------------------------------------------ #
+
+
+class TestParseClassifyRow:
+  """Tests for parse_classify_row."""
+
+  def test_valid_categories(self):
+    config = _make_config(include_justification=False)
+    row = {
+        "session_id": "s1",
+        "transcript": "text",
+        "classify_0": "positive",
+        "classify_1": "safe",
+    }
+    sr, null_count = parse_classify_row("s1", row, config)
+    assert sr.session_id == "s1"
+    assert len(sr.metrics) == 2
+    assert sr.metrics[0].category == "positive"
+    assert sr.metrics[0].passed_validation is True
+    assert sr.metrics[0].parse_error is False
+    assert sr.metrics[1].category == "safe"
+    assert sr.metrics[1].passed_validation is True
+    assert null_count == 0
+
+  def test_null_category(self):
+    config = _make_config(include_justification=False)
+    row = {
+        "session_id": "s1",
+        "transcript": "text",
+        "classify_0": None,
+        "classify_1": "safe",
+    }
+    sr, null_count = parse_classify_row("s1", row, config)
+    assert sr.metrics[0].category is None
+    assert sr.metrics[0].passed_validation is False
+    assert sr.metrics[0].parse_error is False
+    assert sr.metrics[1].category == "safe"
+    assert null_count == 1
+
+  def test_mixed_results(self):
+    config = _make_config(include_justification=False)
+    row = {
+        "session_id": "s1",
+        "transcript": "text",
+        "classify_0": "negative",
+        "classify_1": None,
+    }
+    sr, null_count = parse_classify_row("s1", row, config)
+    assert sr.metrics[0].category == "negative"
+    assert sr.metrics[0].passed_validation is True
+    assert sr.metrics[1].category is None
+    assert sr.metrics[1].passed_validation is False
+    assert null_count == 1
+
+  def test_missing_column(self):
+    config = _make_config(include_justification=False)
+    row = {
+        "session_id": "s1",
+        "transcript": "text",
+        "classify_0": "positive",
+        # classify_1 missing — row.get returns None
+    }
+    sr, null_count = parse_classify_row("s1", row, config)
+    assert sr.metrics[1].category is None
+    assert sr.metrics[1].passed_validation is False
+    assert sr.metrics[1].parse_error is False
+    assert null_count == 1
+
+  def test_empty_string_treated_as_value(self):
+    config = _make_config(include_justification=False)
+    row = {
+        "session_id": "s1",
+        "transcript": "text",
+        "classify_0": "",
+        "classify_1": "safe",
+    }
+    sr, null_count = parse_classify_row("s1", row, config)
+    # Empty string is not None — it's a value from AI.CLASSIFY.
+    assert sr.metrics[0].category == ""
+    assert sr.metrics[0].passed_validation is True
+    assert null_count == 0
+
+  def test_justification_always_none(self):
+    config = _make_config(include_justification=False)
+    row = {
+        "session_id": "s1",
+        "transcript": "text",
+        "classify_0": "positive",
+        "classify_1": "safe",
+    }
+    sr, _ = parse_classify_row("s1", row, config)
+    assert all(m.justification is None for m in sr.metrics)
+
+  def test_raw_response_stores_value(self):
+    config = _make_config(include_justification=False)
+    row = {
+        "session_id": "s1",
+        "transcript": "text",
+        "classify_0": "positive",
+        "classify_1": "safe",
+    }
+    sr, _ = parse_classify_row("s1", row, config)
+    assert sr.metrics[0].raw_response == "positive"
+    assert sr.metrics[1].raw_response == "safe"
+
+  def test_null_count_returned_correctly(self):
+    config = _make_config(include_justification=False)
+    row = {
+        "session_id": "s1",
+        "transcript": "text",
+        "classify_0": None,
+        "classify_1": None,
+    }
+    sr, null_count = parse_classify_row("s1", row, config)
+    assert null_count == 2
