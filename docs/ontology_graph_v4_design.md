@@ -1,154 +1,137 @@
 # Ontology Graph V4 — Configuration-Driven Context Graph
 
-**Issue:** [#52 — Ontology graph demo v4](https://github.com/haiyuan-eng-google/BigQuery-Agent-Analytics-SDK/issues/52)
+Turn unstructured agent telemetry into a queryable knowledge graph using a
+single YAML file. No code changes required — define your ontology, point
+it at your data, and the SDK handles extraction, materialization, and
+BigQuery Property Graph creation automatically.
 
-## Project Objective
-
-Build an end-to-end pipeline that reads a logical YAML graph specification,
-uses `AI.GENERATE` to extract unstructured ADK telemetry into typed
-`ExtractedGraph` Pydantic models, and dynamically generates the BigQuery
-Property Graph DDL.
+**Live demo:** [ontology-v4-deploy.vercel.app](https://ontology-v4-deploy.vercel.app)
+| **Notebook:** [`examples/ontology_graph_v4_demo.ipynb`](../examples/ontology_graph_v4_demo.ipynb)
 
 ---
 
-## Step 1: Define the YMGO YAML Specification
+## Why This Matters
 
-**Task:** Create a YAML configuration file (`ymgo_graph_spec.yaml`) that
-merges the Brainstorming Graph YAML syntax with Yahoo's YMGO v2 ontology.
+Modern ad-tech and commerce platforms make thousands of micro-decisions per
+request — which ad unit to show, which creative to select, which candidate
+to reject and why. These decisions are captured as unstructured agent
+telemetry, but answering questions like *"Why was this ad rejected?"* or
+*"What was the confidence score for each candidate?"* requires tedious
+manual log parsing.
 
-*   **Instructions for Engineer:**
-    *   Define `entities` (Nodes) representing YMGO classes like
-        `DecisionPoint` and `Candidate`.
-    *   Use the `binding.source` field to define the physical BigQuery table
-        routing, mimicking Yahoo's `ymgo:bigqueryTable` annotations.
-    *   Define `relationships` (Edges) like `CandidateEdge` with
-        `from_entity` and `to_entity`.
+The Ontology Graph V4 pipeline solves this by:
 
-**Example YAML:**
-```yaml
-graph:
-  name: YMGO_Context_Graph
-  entities:
-    - name: DecisionPoint
-      binding:
-        source: project.dataset.decision_points
-      properties:
-        - name: decision_type
-          type: string
-    - name: Candidate
-      binding:
-        source: project.dataset.candidates
-      properties:
-        - name: score
-          type: double
-        - name: rejection_rationale
-          type: string
-  relationships:
-    - name: CandidateEdge
-      from_entity: DecisionPoint
-      to_entity: Candidate
-      binding:
-        source: project.dataset.candidate_edges
+1. **Declaring** your business domain once in YAML — entities, relationships,
+   keys, and table bindings.
+2. **Extracting** structured graph data from raw agent logs using
+   `AI.GENERATE` (Gemini), guided by your ontology.
+3. **Materializing** typed nodes and edges into dedicated BigQuery tables.
+4. **Creating** a native BigQuery Property Graph for GQL traversal.
+
+The result: you can write queries like *"For session X, show me every
+DecisionPoint, the candidates it evaluated, their scores, and why any
+were rejected"* — in native GQL, with full type safety.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────┐
+│   YAML Ontology     │  Entities, relationships, keys, table bindings
+│   Specification     │  (single source of truth)
+└────────┬────────────┘
+         │
+         ▼
+┌─────────────────────┐     ┌──────────────────────────────┐
+│   Schema Compiler   │────▶│  Extraction Prompt + Schema   │
+└────────┬────────────┘     └──────────────────────────────┘
+         │
+         ▼
+┌─────────────────────┐     ┌──────────────────────────────┐
+│   AI.GENERATE       │────▶│  ExtractedGraph (Pydantic)    │
+│   (BigQuery-native) │     │  Typed nodes + edges          │
+└────────┬────────────┘     └──────────────────────────────┘
+         │
+         ▼
+┌─────────────────────┐     ┌──────────────────────────────┐
+│   Materializer      │────▶│  Physical BigQuery Tables     │
+│   (table routing)   │     │  One table per entity/rel     │
+└────────┬────────────┘     └──────────────────────────────┘
+         │
+         ▼
+┌─────────────────────┐     ┌──────────────────────────────┐
+│   DDL Transpiler    │────▶│  CREATE PROPERTY GRAPH        │
+│                     │     │  NODE TABLES + EDGE TABLES    │
+└────────┬────────────┘     └──────────────────────────────┘
+         │
+         ▼
+┌─────────────────────┐
+│   GQL Queries       │  MATCH (dp)-[ce]->(ad) WHERE ...
+│   (graph traversal) │  Native BigQuery graph analytics
+└─────────────────────┘
 ```
 
 ---
 
-## Step 2: Integrate the Pydantic `ExtractedGraph` Models
+## YAML Ontology Specification
 
-**Task:** Use the provided Pydantic models as the strict data container for
-the extracted graph instances.
+The YAML spec is the single source of truth. It defines what to extract,
+where to store it, and how to link it in the graph.
 
-*   **Instructions for Engineer:**
-    *   Import the `ExtractedGraph`, `ExtractedNode`, `ExtractedEdge`, and
-        `ExtractedProperty` models exactly as defined.
-    *   Write a Python parser that reads the `ymgo_graph_spec.yaml` file
-        and generates a JSON schema representation of the `ExtractedGraph`
-        Pydantic model. BigQuery's `AI.GENERATE` function requires a strict
-        JSON `output_schema`. By translating the Pydantic model schema into
-        this format, we force Gemini to output its extractions in a
-        structure that perfectly deserializes into our Python models.
+### Format Reference
 
----
+```yaml
+graph:
+  name: My_Context_Graph
 
-## Step 3: Dynamic Semantic Extraction Pipeline
+  entities:
+    - name: EntityName              # Node type name
+      description: "..."            # Used in AI extraction prompt
+      extends: ParentLabel          # Optional label inheritance
+      binding:
+        source: "{{ env }}.table"   # Physical BigQuery table
+      keys:
+        primary: [id_column]        # Primary key column(s)
+      properties:
+        - name: column_name
+          type: string              # string | int64 | double | bool | timestamp
 
-**Task:** Implement the extraction logic that converts unstructured ADK
-event telemetry into populated Pydantic objects.
+  relationships:
+    - name: EdgeName                # Edge type name
+      description: "..."
+      from_entity: SourceEntity
+      to_entity: TargetEntity
+      binding:
+        source: "{{ env }}.edge_table"
+        from_columns: [source_key]
+        to_columns: [target_key]
+      properties:
+        - name: edge_property
+          type: double
+```
 
-*   **Instructions for Engineer:**
-    *   Query the raw unstructured agent traces from the `agent_events`
-        table.
-    *   Construct an `AI.GENERATE` SQL query. The prompt should instruct
-        the LLM to "Extract Decision Points and Candidates according to
-        the provided ontology".
-    *   Pass the JSON schema generated in Step 2 into the `output_schema`
-        parameter.
-    *   When the BigQuery results return, hydrate the LLM's output into
-        the strongly-typed Python objects.
+**Key features:**
 
----
+- **`{{ env }}` placeholders** — resolved at load time, so the same spec
+  works across dev/staging/prod environments.
+- **Label inheritance** (`extends`) — an entity can carry multiple labels
+  in the graph (e.g., `YahooAdUnit` is also a `Candidate`).
+- **Explicit key routing** — `from_columns` / `to_columns` define how edge
+  tables reference source and target nodes. For Property Graph compilation,
+  these must exactly match the referenced entity's full primary key;
+  subset bindings are supported for table materialization but will be
+  rejected by the DDL transpiler.
 
-## Step 4: Automated Table Routing (Physical Binding)
+### Example: Yahoo ADCP Ad Decisioning
 
-**Task:** Route the extracted Pydantic `ExtractedNode` and `ExtractedEdge`
-objects into their respective physical BigQuery tables using the YAML
-bindings.
-
-*   **Instructions for Engineer:**
-    *   Iterate through `ExtractedGraph.nodes` and `ExtractedGraph.edges`.
-    *   Look up the entity `name` in the loaded YAML configuration to find
-        its `binding.source` table.
-    *   Generate and execute BigQuery `INSERT` statements to write the
-        properties of each Node and Edge into their dedicated tables (e.g.,
-        inserting `DecisionPoint` nodes into
-        `project.dataset.decision_points`).
-    *   Use delete-then-insert for session-scoped idempotency.
-    *   When multiple spec entries share the same `binding.source`,
-        group all rows per physical table before persistence to avoid
-        delete-then-insert races.
-
----
-
-## Step 5: Dynamic Property Graph DDL Generation
-
-**Task:** Transpile the YAML relationships into a native BigQuery
-`CREATE PROPERTY GRAPH` statement.
-
-*   **Instructions for Engineer:**
-    *   Write a transpiler function that loops through the `entities` in
-        the YAML to generate the `NODE TABLES` block of the DDL,
-        referencing the bound tables and properties.
-    *   Loop through the `relationships` in the YAML to generate the
-        `EDGE TABLES` block. Map the `from_entity` to the `SOURCE KEY`
-        and the `to_entity` to the `DESTINATION KEY`.
-    *   Execute the generated DDL against BigQuery to instantiate the
-        formal graph.
-
----
-
-## Step 6: End-to-End Validation (The "Showcase" Query)
-
-**Task:** Prove the pipeline works by running a native Graph Query
-Language (GQL) query against the dynamically generated graph.
-
-*   **Instructions for Engineer:**
-    *   Provide a test script that executes a GQL forward traversal:
-        `MATCH (dp:DecisionPoint)-[ce:CandidateEdge]->(cand:Candidate)`.
-    *   Assert that the query returns the extracted candidate scores and
-        rejection rationales, proving that the unstructured telemetry was
-        successfully converted into a strongly-typed audit graph.
-
----
-
-## Detailed YAML Ontology (from issue comment)
+This real-world example models Yahoo's ad decisioning pipeline where
+an agent evaluates candidate ad units at decision points.
 
 ```yaml
 graph:
   name: YMGO_Context_Graph_V3
 
-  # ==========================================
-  # 1. ENTITIES (Nodes)
-  # ==========================================
   entities:
     - name: mako_DecisionPoint
       description: "The atomic unit of decisioning where an agent evaluates alternatives."
@@ -197,9 +180,6 @@ graph:
           type: string
           description: "The specific rule or model threshold that caused rejection."
 
-  # ==========================================
-  # 2. RELATIONSHIPS (Edges)
-  # ==========================================
   relationships:
     - name: CandidateEdge
       description: "Connects a decision point to the evaluated Yahoo Ad Unit."
@@ -227,90 +207,133 @@ graph:
         to_columns: [adUnitId]
 ```
 
-### Why this is more realistic
+This produces the following graph structure:
 
-1. **Inheritance & Ontology Alignment:** It demonstrates logical inheritance
-   (`extends: mako_Candidate`), proving how business items like
-   `sup_YahooAdUnit` naturally act as evaluable candidates in the graph.
-2. **Explicit Table Bindings:** The `binding.source` accurately reflects
-   the real-world physical table structure declared in the
-   `ymgo:spannerTable` annotations in the TTL file.
-3. **Primary & Foreign Key Routing:** The `relationships` block uses
-   `from_columns` and `to_columns` to explicitly tell the transpiler
-   exactly how to construct the `SOURCE KEY` and `DESTINATION KEY` for
-   the BigQuery Property Graph DDL.
+```
+DecisionPoint ──CandidateEdge──▶ YahooAdUnit ◀──ForCandidate── RejectionReason
+```
 
 ---
 
-## Implementation Plan
+## Usage
 
-### Three Layers
+### Python SDK
 
-1. **`GraphSpec`** — YAML ontology definition (Pydantic config models)
-2. **`ExtractedGraph`** — hydrated AI extraction result (runtime instances)
-3. **Property Graph** — generated BigQuery graph DDL
+**One-shot pipeline** — runs the entire flow in a single call:
 
-### Scope Decisions
+```python
+from bigquery_agent_analytics import build_ontology_graph, compile_showcase_gql
 
-- `extends` is **label-only inheritance** in V4. No property or binding
-  inheritance.
-- `{{ env }}` substitution uses simple string replacement (no Jinja2).
-- CLI exposure is added per-phase as needed.
-- V4 sits beside V3 `ContextGraphManager`, not as a replacement.
+# Run the full pipeline
+result = build_ontology_graph(
+    session_ids=["adcp-033c95d7a97d", "adcp-040c04837251"],
+    spec_path="ymgo_graph_spec.yaml",
+    project_id="my-project",
+    dataset_id="agent_analytics",
+    env="my-project.agent_analytics",
+)
 
-### Phase Delivery
+print(f"Extracted {len(result['graph'].nodes)} nodes, {len(result['graph'].edges)} edges")
+print(f"Property Graph: {result['graph_ref']}")
 
-| Phase | Deliverable | Status |
-|-------|-------------|--------|
-| 1 | YAML Spec + Pydantic Models | Merged (PR #53) |
-| 2 | Spec Loader + Schema Compiler | Merged (PR #54) |
-| 3 | Ontology Extraction Engine | Merged (PR #55) |
-| 4 | Physical Table Materialization + Routing | Merged (PR #56) |
-| 5 | Dynamic Property Graph DDL Transpiler | Merged (PR #57) |
-| 6 | Showcase Query Path + Orchestrator | Merged (PR #58) |
+# Generate a GQL traversal query
+gql = compile_showcase_gql(result["spec"], "my-project", "agent_analytics")
+print(gql)
+```
+
+**Step-by-step** — for more control over each phase:
+
+```python
+from bigquery_agent_analytics import (
+    load_graph_spec,
+    OntologyGraphManager,
+    OntologyMaterializer,
+    OntologyPropertyGraphCompiler,
+    compile_extraction_prompt,
+    compile_output_schema,
+)
+
+# 1. Load spec
+spec = load_graph_spec("ymgo_graph_spec.yaml", env="my-project.agent_analytics")
+
+# 2. Extract graph from agent telemetry
+extractor = OntologyGraphManager(
+    project_id="my-project",
+    dataset_id="agent_analytics",
+    spec=spec,
+    endpoint="gemini-2.5-flash",
+)
+graph = extractor.extract_graph(session_ids=["adcp-033c95d7a97d"])
+
+# 3. Create tables and materialize
+materializer = OntologyMaterializer(
+    project_id="my-project",
+    dataset_id="agent_analytics",
+    spec=spec,
+)
+materializer.create_tables()
+materializer.materialize(graph, session_ids=["adcp-033c95d7a97d"])
+
+# 4. Create Property Graph
+compiler = OntologyPropertyGraphCompiler(
+    project_id="my-project",
+    dataset_id="agent_analytics",
+    spec=spec,
+)
+compiler.create_property_graph()
+```
+
+### CLI
+
+```bash
+# Run the full pipeline
+bq-agent-sdk ontology-build \
+    --project-id=my-project \
+    --dataset-id=agent_analytics \
+    --spec-path=ymgo_graph_spec.yaml \
+    --session-ids=adcp-033c95d7a97d,adcp-040c04837251 \
+    --env=my-project.agent_analytics
+
+# Generate a GQL showcase query
+bq-agent-sdk ontology-showcase-gql \
+    --project-id=my-project \
+    --dataset-id=agent_analytics \
+    --spec-path=ymgo_graph_spec.yaml \
+    --env=my-project.agent_analytics
+```
 
 ---
 
-### Phase 5: Dynamic Property Graph DDL Transpiler
+## Generated Property Graph DDL
 
-**Transpiler rules:**
-
-- Each YAML entity becomes a `NODE TABLES` entry.
-- Each relationship becomes an `EDGE TABLES` entry.
-- Use YAML `binding.source` for physical table references.
-- Use `keys.primary` for node keys.
-- Use relationship `from_columns` / `to_columns` for source/destination
-  keys.
-- Reuse the style of existing V3 DDL generation in `context_graph.py`,
-  but make it data-driven.
-
-**Expected DDL shape:**
+The SDK dynamically generates BigQuery `CREATE PROPERTY GRAPH` DDL from
+your YAML spec. For the Yahoo ADCP example above:
 
 ```sql
-CREATE OR REPLACE PROPERTY GRAPH `project.dataset.YMGO_Context_Graph`
+CREATE OR REPLACE PROPERTY GRAPH `my-project.agent_analytics.YMGO_Context_Graph_V3`
   NODE TABLES (
-    `project.dataset.decision_points` AS mako_DecisionPoint
+    `my-project.agent_analytics.decision_points` AS mako_DecisionPoint
       KEY (decision_id, session_id)
       LABEL mako_DecisionPoint
       PROPERTIES (decision_id, decision_type, session_id, extracted_at),
-    `project.dataset.yahoo_ad_units` AS sup_YahooAdUnit
+    `my-project.agent_analytics.yahoo_ad_units` AS sup_YahooAdUnit
       KEY (adUnitId, session_id)
       LABEL sup_YahooAdUnit
       LABEL mako_Candidate
       PROPERTIES (adUnitId, adUnitName, adUnitSize, adUnitPosition, session_id, extracted_at),
-    `project.dataset.rejection_reasons` AS mako_RejectionReason
+    `my-project.agent_analytics.rejection_reasons` AS mako_RejectionReason
       KEY (rejection_id, session_id)
       LABEL mako_RejectionReason
       PROPERTIES (rejection_id, rejectionType, rejectionRule, session_id, extracted_at)
   )
   EDGE TABLES (
-    `project.dataset.candidate_edges` AS CandidateEdge
+    `my-project.agent_analytics.candidate_edges` AS CandidateEdge
       KEY (decision_id, adUnitId, session_id)
       SOURCE KEY (decision_id, session_id) REFERENCES mako_DecisionPoint (decision_id, session_id)
       DESTINATION KEY (adUnitId, session_id) REFERENCES sup_YahooAdUnit (adUnitId, session_id)
       LABEL CandidateEdge
       PROPERTIES (edge_type, mako_scoreValue, extracted_at),
-    `project.dataset.rejection_mappings` AS ForCandidate
+    `my-project.agent_analytics.rejection_mappings` AS ForCandidate
       KEY (rejection_id, adUnitId, session_id)
       SOURCE KEY (rejection_id, session_id) REFERENCES mako_RejectionReason (rejection_id, session_id)
       DESTINATION KEY (adUnitId, session_id) REFERENCES sup_YahooAdUnit (adUnitId, session_id)
@@ -319,44 +342,160 @@ CREATE OR REPLACE PROPERTY GRAPH `project.dataset.YMGO_Context_Graph`
   )
 ```
 
-> **Note:** Node KEY includes `session_id` so that the same business entity
-> in different sessions produces distinct graph nodes, making multi-session
-> builds safe.
+**Design notes:**
 
-**Deliverables:**
-
-- `src/bigquery_agent_analytics/ontology_property_graph.py`
-  - `compile_node_table_clause(entity, project_id, dataset_id)` → SQL
-    fragment
-  - `compile_edge_table_clause(rel, spec, project_id, dataset_id)` → SQL
-    fragment
-  - `compile_property_graph_ddl(spec, project_id, dataset_id,
-    graph_name=None)` → full DDL
-  - `OntologyPropertyGraphCompiler` class
-- `tests/test_ontology_property_graph.py`
-- Wire into `__init__.py` and CLI
+- Node KEY includes `session_id` so the same business entity in different
+  sessions produces distinct graph nodes, making multi-session builds safe.
+- All KEY columns are also listed in PROPERTIES so they are queryable in GQL.
+- `extracted_at` is automatically added to every node and edge table.
 
 ---
 
-### Phase 6: Showcase Query Path
+## GQL Query Examples
 
-- High-level orchestrator:
-  `build_ontology_graph(session_ids, spec_path, graph_name=None)`
-- GQL showcase query:
-  `MATCH (dp:mako_DecisionPoint)-[ce:CandidateEdge]->(ad:sup_YahooAdUnit)`
-- Interactive demo: `examples/ontology_graph_v4_demo.html`
-  ([live deployment](https://ontology-v4-deploy.vercel.app))
-- Notebook walkthrough: `examples/ontology_graph_v4_demo.ipynb`
+Once the Property Graph is created, you can traverse it with native GQL.
+
+### Forward traversal: DecisionPoint to Candidates
+
+```sql
+GRAPH `my-project.agent_analytics.YMGO_Context_Graph_V3`
+MATCH
+  (dp:mako_DecisionPoint)-[ce:CandidateEdge]->(ad:sup_YahooAdUnit)
+WHERE dp.session_id = @session_id
+RETURN
+  dp.decision_id,
+  dp.decision_type,
+  ce.edge_type,
+  ce.mako_scoreValue,
+  ad.adUnitId,
+  ad.adUnitName,
+  ad.adUnitSize,
+  ad.adUnitPosition
+ORDER BY dp.decision_id
+LIMIT 100
+```
+
+### Rejection audit: Why was this ad unit rejected?
+
+```sql
+GRAPH `my-project.agent_analytics.YMGO_Context_Graph_V3`
+MATCH
+  (rr:mako_RejectionReason)-[fc:ForCandidate]->(ad:sup_YahooAdUnit)
+WHERE ad.session_id = @session_id
+RETURN
+  ad.adUnitName,
+  rr.rejectionType,
+  rr.rejectionRule,
+  rr.extracted_at
+ORDER BY ad.adUnitName
+```
+
+### Full decision path: DecisionPoint to Candidate with Rejection Reasons
+
+```sql
+GRAPH `my-project.agent_analytics.YMGO_Context_Graph_V3`
+MATCH
+  (dp:mako_DecisionPoint)-[ce:CandidateEdge]->(ad:sup_YahooAdUnit),
+  (rr:mako_RejectionReason)-[fc:ForCandidate]->(ad)
+WHERE dp.session_id = @session_id
+  AND ce.edge_type = 'DROPPED_CANDIDATE'
+RETURN
+  dp.decision_id,
+  ad.adUnitName,
+  ce.mako_scoreValue AS candidate_score,
+  rr.rejectionType,
+  rr.rejectionRule
+```
 
 ---
 
-## Acceptance Criteria
+## Adapting for Your Own Domain
 
-- A YAML spec can define entities, relationships, bindings, keys, and
-  inheritance.
-- The SDK can load that spec and resolve it deterministically.
-- ADK telemetry can be extracted into typed `ExtractedGraph` objects.
-- Extracted nodes/edges are routed to the correct physical BigQuery tables.
-- The SDK can generate and execute `CREATE PROPERTY GRAPH` from the YAML.
-- A showcase GQL query returns expected candidate scores and rejection
-  rationale.
+The pipeline is fully generic. To model your own business domain:
+
+1. **Define entities** — your domain objects (e.g., `Customer`, `Order`,
+   `Product`, `Campaign`, `AdCreative`).
+2. **Define relationships** — how they connect (e.g., `Placed` from
+   `Customer` to `Order`, `Contains` from `Order` to `Product`).
+3. **Set table bindings** — where each entity/relationship is stored.
+4. **Run the pipeline** — no code changes needed.
+
+### Minimal example: E-commerce Orders
+
+```yaml
+graph:
+  name: ecommerce_graph
+
+  entities:
+    - name: Customer
+      description: "A customer who places orders."
+      binding:
+        source: "{{ env }}.customers"
+      keys:
+        primary: [customer_id]
+      properties:
+        - name: customer_id
+          type: string
+        - name: customer_name
+          type: string
+
+    - name: Order
+      description: "A purchase order."
+      binding:
+        source: "{{ env }}.orders"
+      keys:
+        primary: [order_id]
+      properties:
+        - name: order_id
+          type: string
+        - name: total_amount
+          type: double
+
+  relationships:
+    - name: Placed
+      description: "Customer placed an order."
+      from_entity: Customer
+      to_entity: Order
+      binding:
+        source: "{{ env }}.placed_edges"
+        from_columns: [customer_id]
+        to_columns: [order_id]
+      properties:
+        - name: placed_at
+          type: string
+```
+
+```bash
+bq-agent-sdk ontology-build \
+    --spec-path=ecommerce_spec.yaml \
+    --session-ids=sess-1,sess-2 \
+    --project-id=my-project \
+    --dataset-id=analytics \
+    --env=my-project.analytics
+```
+
+---
+
+## SDK Module Reference
+
+| Module | Class / Function | Purpose |
+|--------|-----------------|---------|
+| `ontology_models` | `load_graph_spec()` | Parse YAML and resolve `{{ env }}` placeholders |
+| `ontology_schema_compiler` | `compile_extraction_prompt()`, `compile_output_schema()` | Generate AI extraction prompt and JSON schema from spec |
+| `ontology_graph` | `OntologyGraphManager` | Extract typed graph from agent telemetry via AI.GENERATE |
+| `ontology_materializer` | `OntologyMaterializer` | Create tables and route extracted data into them |
+| `ontology_property_graph` | `OntologyPropertyGraphCompiler`, `compile_property_graph_ddl()` | Generate and execute `CREATE PROPERTY GRAPH` DDL |
+| `ontology_orchestrator` | `build_ontology_graph()`, `compile_showcase_gql()` | One-shot pipeline and GQL query generation |
+
+---
+
+## Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **YAML over code** | Domain experts can define ontologies without writing Python. Spec changes don't require redeployment. |
+| **`{{ env }}` over Jinja2** | Simple string replacement keeps the spec portable without introducing a template engine dependency. |
+| **Label-only inheritance** | `extends` adds a graph label, not property/binding inheritance. This keeps resolution deterministic and avoids diamond inheritance complexity. |
+| **Session-scoped node identity** | Including `session_id` in every KEY means the same business entity in different sessions produces distinct nodes. This enables multi-session graph builds without collision. |
+| **Delete-then-insert idempotency** | Re-running the pipeline for the same sessions replaces previous data rather than duplicating it. |
+| **BigQuery-native extraction** | `AI.GENERATE` runs server-side in BigQuery, avoiding data transfer costs and keeping the pipeline SQL-native. |
