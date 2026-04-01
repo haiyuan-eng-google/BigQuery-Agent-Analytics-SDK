@@ -1,8 +1,8 @@
 # BigQuery Agent Analytics SDK — Design Document
 
-**Version:** 0.1.0 (Alpha)
+**Version:** 0.3.0
 **Status:** Living document
-**Last Updated:** 2026-02-26
+**Last Updated:** 2026-03-31
 **License:** Apache-2.0
 
 ---
@@ -203,6 +203,17 @@ As demonstrated in the [e2e demo](../examples/e2e_demo.py):
    │(canonical helpers│  │(per-event BQ views│  │(Property Graph, GQL, │
    └──────────────────┘  └───────────────────┘  │ world-change detect) │
                                                 └──────────────────────┘
+
+   ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────┐
+   │ categorical_evaluator│  │ ontology_* (6 modules)│  │      cli         │
+   │ categorical_views    │  │ (YAML → AI.GENERATE → │  │ (Typer commands) │
+   │ (label evaluation)   │  │  tables → PG → GQL)   │  │                  │
+   └──────────────────────┘  └──────────────────────┘  └──────────────────┘
+
+   ┌──────────────────┐  ┌───────────────────┐
+   │ udf_kernels      │  │ serialization     │
+   │ udf_sql_templates│  │ formatter         │
+   └──────────────────┘  └───────────────────┘
 ```
 
 ### 3.2 Module Categorization
@@ -212,11 +223,16 @@ As demonstrated in the [e2e demo](../examples/e2e_demo.py):
 | **Entry Point** | `client.py` | High-level sync API, BigQuery query orchestration |
 | **Core Data** | `trace.py` | Trace/Span reconstruction, DAG rendering, filtering |
 | **Evaluation Engine** | `evaluators.py`, `trace_evaluator.py`, `multi_trial.py`, `grader_pipeline.py` | Deterministic metrics, LLM-as-judge, trajectory matching, multi-trial statistics, grader composition |
+| **Categorical Evaluation** | `categorical_evaluator.py`, `categorical_views.py` | User-defined categorical classification with AI.GENERATE + Gemini fallback, dashboard views with dedup |
 | **Eval Governance** | `eval_suite.py`, `eval_validator.py` | Task lifecycle management, static quality validation |
 | **Feedback & Insights** | `feedback.py`, `insights.py` | Drift detection, question distribution, multi-stage analysis pipeline |
 | **AI/ML** | `ai_ml_integration.py`, `bigframes_evaluator.py` | BigQuery AI.GENERATE, embeddings, anomaly detection, DataFrame API |
 | **Memory** | `memory_service.py` | Cross-session context retrieval, semantic search, user profiling |
-| **Context Graph** | `context_graph.py` | Property Graph linking traces to business entities, BizNode extraction via AI.GENERATE, GQL traversal, world-change detection, artifact lineage |
+| **Context Graph (V2/V3)** | `context_graph.py` | Property Graph linking traces to business entities, BizNode extraction via AI.GENERATE, GQL traversal, world-change detection, decision semantics |
+| **Ontology Graph (V4)** | `ontology_models.py`, `ontology_schema_compiler.py`, `ontology_graph.py`, `ontology_materializer.py`, `ontology_property_graph.py`, `ontology_orchestrator.py` | Configuration-driven graph pipeline: YAML spec loading, AI extraction, physical table routing, Property Graph DDL transpilation, GQL showcase |
+| **CLI** | `cli.py` | Command-line interface: traces, evaluation, categorical evaluation, insights, drift, views, ontology pipeline |
+| **Interfaces** | `serialization.py`, `formatter.py` | JSON serialization for CLI/Remote Function boundaries, output formatting (JSON/text/table) |
+| **UDF Kernels** | `udf_kernels.py`, `udf_sql_templates.py` | Pure analytical kernels for BigQuery Python UDFs, SQL templates for UDF registration |
 | **Utilities** | `event_semantics.py`, `views.py` | Canonical event type predicates, per-event-type BigQuery view management |
 | **Package** | `__init__.py` | Graceful optional import aggregation |
 
@@ -880,6 +896,93 @@ Builds a BigQuery Property Graph that cross-links technical execution traces to 
 | `explain_decision(event_type, entity)` | Get the reasoning chain for a specific decision |
 | `get_biz_nodes_for_session(session_id)` | Read BizNodes for a session |
 
+### 4.15 `categorical_evaluator.py` — Categorical Evaluation
+
+Classifies agent sessions into user-defined categories (e.g., `GOOD / NEEDS_IMPROVEMENT / CRITICAL`) using BigQuery `AI.GENERATE` with automatic Gemini API fallback.
+
+**Key design decisions:**
+
+| Decision | Rationale |
+|----------|-----------|
+| BigQuery-first with Gemini fallback | `AI.GENERATE` processes batches server-side; Gemini API provides universal access when BigQuery ML is unavailable |
+| `execution_mode` tracking | Every result records whether it used `bq_ai_generate`, `api_fallback`, or `api_direct`, enabling operational monitoring |
+| Configurable `prompt_version` | Allows A/B testing of prompt strategies with per-version result tracking |
+| Persistence to `categorical_results` | Append-only streaming insert; dedup is handled at the view layer |
+
+**Key classes:**
+
+- `CategoricalEvaluationConfig` — metric definitions with categories, thresholds, and prompt templates
+- `CategoricalEvaluator` — orchestrates batch evaluation with `evaluate()` and `evaluate_and_persist()`
+
+### 4.16 `categorical_views.py` — Dashboard Views
+
+Provides pre-aggregated BigQuery views over the `categorical_results` table with deduplication at read time.
+
+**Views:**
+
+| View | Purpose |
+|------|---------|
+| `categorical_results_latest` | Base dedup view using `ROW_NUMBER() OVER (PARTITION BY session_id, metric_name, prompt_version)` |
+| `categorical_daily_counts` | Daily category distribution by metric |
+| `categorical_hourly_counts` | Rolling hourly counts for near-real-time dashboards |
+| `categorical_operational_metrics` | Parse error rate + fallback rate by day and endpoint |
+
+All downstream views query from the dedup base, not the raw append-only table.
+
+### 4.17 Ontology Graph Modules (V4) — Configuration-Driven Graph Pipeline
+
+Six modules that together implement a fully YAML-driven graph extraction and materialization pipeline. See [Ontology Graph V4 Design](ontology_graph_v4_design.md) for the full specification.
+
+**Module responsibilities:**
+
+| Module | Class / Function | Role |
+|--------|-----------------|------|
+| `ontology_models.py` | `GraphSpec`, `EntitySpec`, `load_graph_spec()` | YAML parsing, `{{ env }}` resolution, Pydantic validation |
+| `ontology_schema_compiler.py` | `compile_extraction_prompt()`, `compile_output_schema()` | Deterministic prompt + JSON schema generation from spec |
+| `ontology_graph.py` | `OntologyGraphManager` | `AI.GENERATE` extraction → `ExtractedGraph` hydration |
+| `ontology_materializer.py` | `OntologyMaterializer` | Table creation + streaming insert with delete-then-insert idempotency |
+| `ontology_property_graph.py` | `OntologyPropertyGraphCompiler` | YAML → `CREATE PROPERTY GRAPH` DDL transpilation |
+| `ontology_orchestrator.py` | `build_ontology_graph()`, `compile_showcase_gql()` | One-shot pipeline + GQL query generation |
+
+**Key design decisions:**
+
+| Decision | Rationale |
+|----------|-----------|
+| YAML over code | Domain experts define ontologies without Python; spec changes don't require redeployment |
+| Label-only inheritance | `extends` adds graph labels, not property/binding inheritance — keeps resolution deterministic |
+| Session-scoped node identity | `session_id` in every KEY prevents cross-session entity collisions |
+| All columns in PROPERTIES | BigQuery Property Graph KEY columns are not queryable in GQL unless also listed in PROPERTIES |
+
+### 4.18 `cli.py` — Command-Line Interface
+
+Typer-based CLI exposing SDK functionality for CI/CD pipelines, cron jobs, and ad-hoc use.
+
+**Command groups:**
+
+| Command | Description |
+|---------|-------------|
+| `doctor` | Validate BigQuery connectivity and table schema |
+| `traces list` / `traces get` | List and inspect agent traces |
+| `evaluate` | Run code or LLM evaluation |
+| `categorical-eval` | Run categorical evaluation with optional persistence |
+| `categorical-views` | Create dashboard views over categorical results |
+| `insights` | Generate multi-stage analysis reports |
+| `drift` | Compare production traces against golden datasets |
+| `distribution` | Analyze question distribution patterns |
+| `views create-all` | Create per-event-type BigQuery views |
+| `ontology-build` | Run the full ontology graph pipeline |
+| `ontology-showcase-gql` | Generate GQL traversal queries from spec |
+
+All commands support `--format` (json/text/table) output via the `formatter.py` module.
+
+### 4.19 `udf_kernels.py` — BigQuery Python UDF Kernels
+
+Pure analytical functions designed to run inside BigQuery Python UDFs. These kernels are deterministic, side-effect free, and depend only on the Python standard library.
+
+**Available kernels:** `classify_event_family`, `extract_tool_outcome`, `compute_latency_bucket`, `is_error_event`, `extract_response_text`.
+
+`udf_sql_templates.py` generates the `CREATE FUNCTION` SQL for registering these kernels as BigQuery UDFs.
+
 ---
 
 ## 5. Data Model
@@ -1429,20 +1532,38 @@ All tests mock BigQuery — no GCP credentials or live BigQuery access is needed
 
 ```
 tests/
-├── test_sdk_client.py          # Client integration tests
-├── test_sdk_evaluators.py      # CodeEvaluator + LLMAsJudge
-├── test_sdk_trace.py           # Trace/Span reconstruction
-├── test_sdk_feedback.py        # Drift detection
-├── test_sdk_insights.py        # Insights pipeline
-├── test_trace_evaluator.py     # Trajectory matching
-├── test_multi_trial.py         # Multi-trial runner
-├── test_grader_pipeline.py     # Grader composition
-├── test_eval_suite.py          # Eval suite lifecycle
-├── test_eval_validator.py      # Static validation
-├── test_memory_service.py      # Memory service
-├── test_ai_ml_integration.py   # AI/ML integration
-└── test_bigframes_evaluator.py # BigFrames evaluator
+├── test_sdk_client.py              # Client integration tests
+├── test_sdk_evaluators.py          # CodeEvaluator + LLMAsJudge
+├── test_sdk_trace.py               # Trace/Span reconstruction
+├── test_sdk_feedback.py            # Drift detection
+├── test_sdk_insights.py            # Insights pipeline
+├── test_trace_evaluator.py         # Trajectory matching
+├── test_multi_trial.py             # Multi-trial runner
+├── test_grader_pipeline.py         # Grader composition
+├── test_eval_suite.py              # Eval suite lifecycle
+├── test_eval_validator.py          # Static validation
+├── test_memory_service.py          # Memory service
+├── test_ai_ml_integration.py       # AI/ML integration
+├── test_bigframes_evaluator.py     # BigFrames evaluator
+├── test_categorical_evaluator.py   # Categorical evaluation engine
+├── test_categorical_views.py       # Dashboard view SQL generation
+├── test_context_graph.py           # Context Graph V2/V3
+├── test_ontology_models.py         # YAML spec parsing + validation
+├── test_ontology_schema_compiler.py# Schema + prompt compilation
+├── test_ontology_graph.py          # Ontology extraction + hydration
+├── test_ontology_materializer.py   # Table creation + materialization
+├── test_ontology_property_graph.py # DDL transpilation
+├── test_ontology_orchestrator.py   # End-to-end orchestrator + GQL
+├── test_cli.py                     # CLI command tests
+├── test_event_semantics.py         # Event semantic layer
+├── test_views.py                   # BigQuery view management
+├── test_formatter.py               # Output formatting
+├── test_serialization.py           # JSON serialization
+├── test_udf_kernels.py             # UDF kernel functions
+└── test_udf_sql_templates.py       # UDF SQL generation
 ```
+
+> **1297 tests** as of v0.3.0, all running without GCP credentials.
 
 ### 12.2 Mock Strategy
 
@@ -1520,50 +1641,55 @@ class TestTraceEvaluator:
 
 ## 14. Future Directions
 
-Based on the current alpha architecture, natural evolution paths include:
+### 14.1 Implemented Since v0.1 Alpha
 
-### 14.1 Streaming Evaluation
+The following capabilities have been delivered since the original design:
 
-The current batch-oriented evaluation model requires waiting for traces to land in BigQuery. A streaming evaluation mode could evaluate sessions as events arrive, using BigQuery subscriptions or Pub/Sub integration.
+**Context Graph V2/V3 (v0.2):**
+- 4-Pillar Property Graph: TechNode + BizNode + Caused edges + Evaluated cross-links
+- BizNode extraction via `AI.GENERATE` with structured `output_schema`
+- GQL trace reconstruction replacing recursive CTEs with quantified-path traversal
+- World-change detection with fail-closed semantics for HITL safety
+- Decision Semantics: DecisionPoint + Candidate node types with rejection rationale tracking
 
-### 14.2 Evaluation Result Persistence
+**Ontology Graph V4 (v0.3):**
+- Configuration-driven graph pipeline: YAML spec → AI extraction → materialization → Property Graph
+- Fully generic — any business ontology can be modeled without code changes
+- `build_ontology_graph()` one-shot orchestrator and `compile_showcase_gql()` query generator
+- See [Ontology Graph V4 Design](ontology_graph_v4_design.md)
 
-While `BatchEvaluator.store_evaluation_results()` exists, there's no unified evaluation result store. A standardized `evaluation_results` table with a consistent schema across all evaluator types would enable:
-- Historical trend tracking
-- Regression detection across deployments
-- Dashboard integration
+**Categorical Evaluation (v0.3):**
+- User-defined categorical classification with configurable categories and prompt templates
+- BigQuery `AI.GENERATE` with automatic Gemini API fallback
+- Persistent result storage with append-only writes and dedup-at-read views
+- Dashboard views: daily/hourly counts, operational metrics (parse error rate, fallback rate)
+- CLI exposure via `categorical-eval` and `categorical-views` commands
 
-### 14.3 Multi-Agent Trace Support
+**CLI & Interfaces (v0.2):**
+- Typer-based CLI with 12+ commands covering traces, evaluation, insights, drift, views, ontology
+- JSON/text/table output formatting
+- Serialization layer for Remote Function boundaries
 
-The current trace reconstruction handles single-agent sessions well. Multi-agent orchestration (where an agent delegates to sub-agents) would benefit from:
-- Cross-session trace correlation
-- Agent-specific evaluation within a multi-agent session
-- Delegation pattern detection
+**Python UDF Kernels (v0.2):**
+- Pure analytical kernels for BigQuery Python UDFs
+- SQL template generation for UDF registration
 
-### 14.4 Embedding-Based Drift Detection
+### 14.2 Open Evolution Paths
 
-The current drift detection uses keyword matching. The SQL template for semantic drift (`_SEMANTIC_DRIFT_QUERY`) exists but is not wired into the execution path. Activating vector-based drift detection would significantly improve coverage detection accuracy.
+**Streaming / near-real-time evaluation:**
+The batch evaluation model works for post-hoc analysis. Micro-batch evaluation (e.g., `TraceFilter(last="5m")` + cron) provides near-real-time coverage. True streaming evaluation via BigQuery subscriptions or Pub/Sub remains a future option.
 
-### 14.5 Cost Attribution
+**Cross-session entity resolution:**
+The Ontology Graph V4 creates session-scoped nodes by design. Deduplicating business entities across sessions (e.g., "Yahoo Homepage" appearing in multiple campaigns) would enable cross-session graph analytics.
 
-While `CodeEvaluator.cost_per_session()` estimates cost from token counts, deeper cost attribution (by tool, by agent, by prompt version) would enable cost optimization at the component level.
+**Graph-based anomaly detection:**
+GQL pattern matching over Property Graphs could detect unusual execution paths (e.g., a tool call sequence that never appeared in golden datasets).
 
-### 14.6 Context Graph — Implemented (v0.2)
+**Embedding-based drift detection:**
+The SQL template for semantic drift (`_SEMANTIC_DRIFT_QUERY`) exists but is not wired into the execution path. Activating vector-based drift detection would improve coverage detection accuracy.
 
-The Context Graph module has been implemented, providing:
-- **4-Pillar Property Graph**: TechNode + BizNode + Caused edges + Evaluated cross-links
-- **BizNode extraction via AI.GENERATE** with structured `output_schema`
-- **GQL trace reconstruction** replacing recursive CTEs with quantified-path traversal
-- **World-change detection** with fail-closed semantics for HITL safety
-- **Artifact lineage** tracking via `artifact_uri` on BizNodes and cross-links
-- **MERGE with DELETE** for stale BizNode cleanup
+**Multi-agent trace support:**
+Multi-agent orchestration (where an agent delegates to sub-agents) would benefit from cross-session trace correlation and agent-specific evaluation.
 
-See `context_graph.py` and the `examples/context_graph_adcp_demo.ipynb` notebook.
-
-### 14.7 Context Graph Evolution
-
-Future enhancements to the Context Graph:
-- **Temporal graph versioning**: Snapshot the graph at each HITL checkpoint for audit trails
-- **Cross-session entity resolution**: Deduplicate BizNodes across sessions (e.g., "Yahoo Homepage" appearing in multiple campaigns)
-- **Graph-based anomaly detection**: Use GQL pattern matching to detect unusual execution paths
-- **Configurable fail-closed policy**: Allow callers to opt into fail-open mode for non-critical checks while keeping fail-closed as the default
+**Cost attribution:**
+Deeper cost attribution by tool, agent, and prompt version would enable cost optimization at the component level beyond the current per-session estimates.
