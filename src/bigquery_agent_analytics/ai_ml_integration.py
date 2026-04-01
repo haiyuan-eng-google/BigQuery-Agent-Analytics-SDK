@@ -574,7 +574,8 @@ class EmbeddingSearchClient:
     """Builds or refreshes the embeddings index.
 
     Uses ``AI.EMBED`` by default.  Falls back to
-    ``ML.GENERATE_EMBEDDING`` when ``embedding_model`` is set.
+    ``ML.GENERATE_EMBEDDING`` when ``embedding_model`` is a legacy
+    BQ ML model reference (fully-qualified ``project.dataset.model``).
 
     Args:
         since_days: Number of days of data to index.
@@ -582,7 +583,7 @@ class EmbeddingSearchClient:
     Returns:
         True if successful, False otherwise.
     """
-    if self.embedding_model:
+    if self.embedding_model and self.embedding_model.count(".") >= 2:
       query = self._LEGACY_INDEX_EMBEDDINGS_QUERY.format(
           project=self.project_id,
           dataset=self.dataset_id,

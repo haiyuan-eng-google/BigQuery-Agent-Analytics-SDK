@@ -717,6 +717,33 @@ class TestEmbeddingSearchAIEmbedMigration:
     )
     assert client.embedding_model == "p.d.text_embedding_model"
 
+  @pytest.mark.asyncio
+  async def test_plain_endpoint_as_model_uses_ai_embed(self):
+    """A plain endpoint string (no dots) must NOT trigger the legacy path.
+
+    Regression test: build_embeddings_index() previously used a bare
+    ``if self.embedding_model:`` check, which incorrectly routed
+    plain endpoint names like ``text-embedding-005`` to the legacy
+    ``ML.GENERATE_EMBEDDING`` template.  The fix applies the same
+    ``count('.') >= 2`` rule used by ``generate_embeddings()``.
+    """
+    mock_bq = MagicMock()
+    mock_job = MagicMock()
+    mock_bq.query.return_value = mock_job
+    mock_job.result.return_value = []
+
+    client = EmbeddingSearchClient(
+        project_id="p",
+        dataset_id="d",
+        client=mock_bq,
+        embedding_model="text-embedding-005",
+    )
+    await client.build_embeddings_index(since_days=7)
+
+    executed_sql = mock_bq.query.call_args[0][0]
+    assert "AI.EMBED" in executed_sql
+    assert "ML.GENERATE_EMBEDDING" not in executed_sql
+
 
 class TestAIDetectAnomaliesMigration:
   """Tests for AI.DETECT_ANOMALIES migration from ML.DETECT_ANOMALIES."""
