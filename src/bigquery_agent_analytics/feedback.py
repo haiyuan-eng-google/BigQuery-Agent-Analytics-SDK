@@ -108,8 +108,50 @@ SELECT question
 FROM `{project}.{dataset}.{golden_table}`
 """
 
-# SQL: semantic drift using embeddings
-_SEMANTIC_DRIFT_QUERY = """\
+# SQL: semantic drift using AI.EMBED (primary, no model creation needed)
+_AI_EMBED_SEMANTIC_DRIFT_QUERY = """\
+WITH golden AS (
+  SELECT
+    question,
+    AI.EMBED(
+      question,
+      endpoint => '{endpoint}'
+    ).result AS embedding
+  FROM `{project}.{dataset}.{golden_table}`
+),
+production AS (
+  SELECT
+    session_id,
+    JSON_EXTRACT_SCALAR(content, '$.text_summary') AS question,
+    AI.EMBED(
+      JSON_EXTRACT_SCALAR(content, '$.text_summary'),
+      endpoint => '{endpoint}'
+    ).result AS embedding
+  FROM `{project}.{dataset}.{table}`
+  WHERE event_type = 'USER_MESSAGE_RECEIVED'
+    AND JSON_EXTRACT_SCALAR(
+      content, '$.text_summary'
+    ) IS NOT NULL
+    AND {where}
+  LIMIT @trace_limit
+)
+SELECT
+  g.question AS golden_question,
+  p.question AS closest_production,
+  ML.DISTANCE(
+    g.embedding, p.embedding, 'COSINE'
+  ) AS distance
+FROM golden g
+CROSS JOIN production p
+QUALIFY ROW_NUMBER() OVER (
+  PARTITION BY g.question ORDER BY distance ASC
+) = 1
+ORDER BY distance ASC
+"""
+
+# Legacy SQL: semantic drift using ML.GENERATE_EMBEDDING
+# (requires a pre-created BQ ML embedding model)
+_LEGACY_SEMANTIC_DRIFT_QUERY = """\
 WITH golden AS (
   SELECT
     question,
@@ -151,6 +193,9 @@ QUALIFY ROW_NUMBER() OVER (
 ) = 1
 ORDER BY distance ASC
 """
+
+# Keep backward-compatible alias.
+_SEMANTIC_DRIFT_QUERY = _LEGACY_SEMANTIC_DRIFT_QUERY
 
 
 # ------------------------------------------------------------------ #
@@ -490,7 +535,15 @@ async def _semantic_drift(
     prod_questions: list[str],
     similarity_threshold: float = 0.3,
 ) -> DriftReport:
-  """Computes semantic drift using ML.GENERATE_EMBEDDING cosine distance.
+  """Computes semantic drift using embedding cosine distance.
+
+  Uses ``AI.EMBED`` (scalar, no model creation needed) when the
+  *embedding_model* is not a legacy BQ ML model reference.  Falls
+  back to ``ML.GENERATE_EMBEDDING`` for legacy model references
+  (two or more dots, e.g. ``project.dataset.model``).
+
+  Both paths use ``ML.DISTANCE`` for the final cosine computation
+  (no AI Operator equivalent for vector distance).
 
   Args:
       bq_client: BigQuery client instance.
@@ -500,7 +553,9 @@ async def _semantic_drift(
       golden_table: Golden questions table.
       where_clause: SQL WHERE clause for filtering.
       query_params: BigQuery query parameters.
-      embedding_model: BQ ML embedding model reference.
+      embedding_model: Vertex AI endpoint (e.g. ``text-embedding-005``)
+          or legacy BQ ML model reference (e.g.
+          ``project.dataset.embedding_model``).
       golden_questions: Pre-loaded golden questions.
       prod_questions: Pre-loaded production questions.
       similarity_threshold: Cosine distance threshold below which a
@@ -513,14 +568,24 @@ async def _semantic_drift(
 
   loop = asyncio.get_event_loop()
 
-  query = _SEMANTIC_DRIFT_QUERY.format(
-      project=project_id,
-      dataset=dataset_id,
-      table=table_id,
-      golden_table=golden_table,
-      model=embedding_model,
-      where=where_clause,
-  )
+  if _is_legacy_model_ref(embedding_model):
+    query = _LEGACY_SEMANTIC_DRIFT_QUERY.format(
+        project=project_id,
+        dataset=dataset_id,
+        table=table_id,
+        golden_table=golden_table,
+        model=embedding_model,
+        where=where_clause,
+    )
+  else:
+    query = _AI_EMBED_SEMANTIC_DRIFT_QUERY.format(
+        project=project_id,
+        dataset=dataset_id,
+        table=table_id,
+        golden_table=golden_table,
+        endpoint=embedding_model,
+        where=where_clause,
+    )
 
   job_config = bq_mod.QueryJobConfig(query_parameters=query_params)
   job = await loop.run_in_executor(

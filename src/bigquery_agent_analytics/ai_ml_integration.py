@@ -14,11 +14,20 @@
 
 """BigQuery AI/ML Integration for Agent Analytics.
 
-This module provides integration with BigQuery's advanced AI/ML capabilities:
+This module provides integration with BigQuery's AI Operator and ML
+capabilities:
 
 - AI.GENERATE: Text generation with Gemini for trace analysis
-- AI.EMBED / ML.GENERATE_EMBEDDING: Generate embeddings for semantic search
-- ML.DETECT_ANOMALIES: Detect unusual agent behavior patterns
+- AI.EMBED: Generate embeddings for semantic search (scalar, no model
+  creation needed).  Falls back to legacy ``ML.GENERATE_EMBEDDING``
+  when the caller supplies a pre-created BQ ML model reference.
+- AI.DETECT_ANOMALIES: Time-series anomaly detection using the
+  built-in TimesFM model (no model training needed).  Falls back to
+  legacy ``ML.DETECT_ANOMALIES`` with ARIMA_PLUS when
+  ``use_legacy_anomaly_model`` is True.
+- ML.DETECT_ANOMALIES: Behavioral anomaly detection via AUTOENCODER
+  (requires model training — no AI Operator equivalent).
+- ML.DISTANCE: Vector distance computation (no AI Operator equivalent).
 - Batch evaluation using BigQuery's high-throughput ML inference
 
 Example usage:
@@ -125,8 +134,20 @@ class BigQueryAIClient:
   ) AS result
   """
 
-  # SQL for embedding generation using ML.GENERATE_EMBEDDING
-  _GENERATE_EMBEDDING_QUERY = """
+  # SQL for embedding generation using AI.EMBED (primary, no model needed)
+  _AI_EMBED_QUERY = """
+  SELECT
+    content,
+    AI.EMBED(
+      content,
+      endpoint => '{endpoint}'
+    ).result AS embedding
+  FROM UNNEST(@texts) AS content
+  """
+
+  # Legacy SQL for embedding generation using ML.GENERATE_EMBEDDING
+  # (requires a pre-created BQ ML model)
+  _LEGACY_GENERATE_EMBEDDING_QUERY = """
   SELECT
     content,
     ML.GENERATE_EMBEDDING(
@@ -135,6 +156,8 @@ class BigQueryAIClient:
     ).ml_generate_embedding_result as embedding
   FROM UNNEST(@texts) as content
   """
+
+  _DEFAULT_EMBEDDING_ENDPOINT = "text-embedding-005"
 
   def __init__(
       self,
@@ -146,6 +169,7 @@ class BigQueryAIClient:
       location: str = "US",
       endpoint: Optional[str] = None,
       connection_id: Optional[str] = None,
+      embedding_endpoint: Optional[str] = None,
   ) -> None:
     """Initializes BigQueryAIClient.
 
@@ -155,11 +179,17 @@ class BigQueryAIClient:
         client: Optional BigQuery client.
         text_model: Deprecated alias for *endpoint*. Kept for
             backward compatibility.
-        embedding_model: Model for embeddings.
+        embedding_model: Legacy BQ ML model reference for
+            ``ML.GENERATE_EMBEDDING``.  When set to a fully-qualified
+            model reference (``project.dataset.model``), the legacy
+            path is used.  Otherwise ``AI.EMBED`` with
+            *embedding_endpoint* is preferred.
         location: BigQuery location.
         endpoint: AI.GENERATE endpoint (default
             ``gemini-2.5-flash``).
         connection_id: Optional BigQuery connection resource ID.
+        embedding_endpoint: Vertex AI endpoint for ``AI.EMBED``
+            (default ``text-embedding-005``).
     """
     self.project_id = project_id
     self.dataset_id = dataset_id
@@ -171,9 +201,10 @@ class BigQueryAIClient:
     self.endpoint = endpoint or text_model or self._DEFAULT_ENDPOINT
     # Keep text_model for backward compatibility
     self.text_model = text_model or self.endpoint
-    self.embedding_model = (
-        embedding_model or f"{project_id}.{dataset_id}.text_embedding_model"
+    self.embedding_endpoint = (
+        embedding_endpoint or self._DEFAULT_EMBEDDING_ENDPOINT
     )
+    self.embedding_model = embedding_model
 
   @property
   def client(self) -> bigquery.Client:
@@ -241,7 +272,11 @@ class BigQueryAIClient:
       self,
       texts: list[str],
   ) -> list[EmbeddingResult]:
-    """Generates embeddings for texts using ML.GENERATE_EMBEDDING.
+    """Generates embeddings for texts.
+
+    Uses ``AI.EMBED`` (scalar, no model creation needed) by default.
+    Falls back to ``ML.GENERATE_EMBEDDING`` when ``embedding_model``
+    is set to a pre-created BQ ML model reference (two or more dots).
 
     Args:
         texts: List of texts to embed.
@@ -252,15 +287,15 @@ class BigQueryAIClient:
     if not texts:
       return []
 
-    query = f"""
-    SELECT
-      content,
-      ML.GENERATE_EMBEDDING(
-        MODEL `{self.embedding_model}`,
-        STRUCT(content AS content)
-      ).ml_generate_embedding_result as embedding
-    FROM UNNEST(@texts) as content
-    """
+    # Route: legacy ML.GENERATE_EMBEDDING when a BQ ML model ref is set
+    if self.embedding_model and self.embedding_model.count(".") >= 2:
+      query = self._LEGACY_GENERATE_EMBEDDING_QUERY.format(
+          model=self.embedding_model,
+      )
+    else:
+      query = self._AI_EMBED_QUERY.format(
+          endpoint=self.embedding_endpoint,
+      )
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
@@ -371,7 +406,33 @@ class EmbeddingSearchClient:
   CLUSTER BY user_id, event_type
   """
 
-  _INDEX_EMBEDDINGS_QUERY = """
+  # Primary: AI.EMBED (scalar, no model creation needed)
+  _AI_EMBED_INDEX_QUERY = """
+  CREATE OR REPLACE TABLE `{project}.{dataset}.{table}_indexed` AS
+  SELECT
+    e.session_id,
+    e.invocation_id,
+    e.event_type,
+    JSON_EXTRACT_SCALAR(e.content, '$.text_summary') as content,
+    e.timestamp,
+    e.user_id,
+    AI.EMBED(
+      JSON_EXTRACT_SCALAR(e.content, '$.text_summary'),
+      endpoint => '{endpoint}'
+    ).result as embedding
+  FROM `{project}.{dataset}.{source_table}` e
+  WHERE e.event_type IN (
+    'USER_MESSAGE_RECEIVED', 'LLM_RESPONSE', 'AGENT_COMPLETED'
+  )
+    AND COALESCE(
+      JSON_EXTRACT_SCALAR(e.content, '$.text_summary'),
+      JSON_EXTRACT_SCALAR(e.content, '$.response')
+    ) IS NOT NULL
+    AND e.timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+  """
+
+  # Legacy: ML.GENERATE_EMBEDDING (requires pre-created BQ ML model)
+  _LEGACY_INDEX_EMBEDDINGS_QUERY = """
   CREATE OR REPLACE TABLE `{project}.{dataset}.{table}_indexed` AS
   SELECT
     e.session_id,
@@ -403,6 +464,7 @@ class EmbeddingSearchClient:
       source_table: str = "agent_events",
       client: Optional[bigquery.Client] = None,
       embedding_model: Optional[str] = None,
+      embedding_endpoint: str = "text-embedding-005",
   ) -> None:
     """Initializes EmbeddingSearchClient.
 
@@ -412,16 +474,19 @@ class EmbeddingSearchClient:
         embeddings_table: Table for embeddings.
         source_table: Source events table.
         client: Optional BigQuery client.
-        embedding_model: Model for embeddings.
+        embedding_model: Legacy BQ ML model reference for
+            ``ML.GENERATE_EMBEDDING``.  When set, the legacy path
+            is used.  Pass ``None`` (default) to use ``AI.EMBED``.
+        embedding_endpoint: Vertex AI endpoint for ``AI.EMBED``
+            (default ``text-embedding-005``).
     """
     self.project_id = project_id
     self.dataset_id = dataset_id
     self.embeddings_table = embeddings_table
     self.source_table = source_table
     self._client = client
-    self.embedding_model = (
-        embedding_model or f"{project_id}.{dataset_id}.text_embedding_model"
-    )
+    self.embedding_model = embedding_model
+    self.embedding_endpoint = embedding_endpoint
 
   @property
   def client(self) -> bigquery.Client:
@@ -508,19 +573,32 @@ class EmbeddingSearchClient:
   ) -> bool:
     """Builds or refreshes the embeddings index.
 
+    Uses ``AI.EMBED`` by default.  Falls back to
+    ``ML.GENERATE_EMBEDDING`` when ``embedding_model`` is a legacy
+    BQ ML model reference (fully-qualified ``project.dataset.model``).
+
     Args:
         since_days: Number of days of data to index.
 
     Returns:
         True if successful, False otherwise.
     """
-    query = self._INDEX_EMBEDDINGS_QUERY.format(
-        project=self.project_id,
-        dataset=self.dataset_id,
-        table=self.embeddings_table,
-        source_table=self.source_table,
-        model=self.embedding_model,
-    )
+    if self.embedding_model and self.embedding_model.count(".") >= 2:
+      query = self._LEGACY_INDEX_EMBEDDINGS_QUERY.format(
+          project=self.project_id,
+          dataset=self.dataset_id,
+          table=self.embeddings_table,
+          source_table=self.source_table,
+          model=self.embedding_model,
+      )
+    else:
+      query = self._AI_EMBED_INDEX_QUERY.format(
+          project=self.project_id,
+          dataset=self.dataset_id,
+          table=self.embeddings_table,
+          source_table=self.source_table,
+          endpoint=self.embedding_endpoint,
+      )
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
@@ -544,13 +622,57 @@ class EmbeddingSearchClient:
 
 
 class AnomalyDetector:
-  """Detects anomalies in agent behavior using BigQuery ML.
+  """Detects anomalies in agent behavior using BigQuery AI/ML.
 
-  Supports time-series anomaly detection for latency, error rates,
-  and behavioral patterns using ARIMA and autoencoder models.
+  Supports two detection modes:
+
+  - **Time-series latency anomaly detection** — uses
+    ``AI.DETECT_ANOMALIES`` (built-in TimesFM, no model training
+    needed) by default.  Set ``use_legacy_anomaly_model=True`` to
+    use the legacy ``ML.DETECT_ANOMALIES`` path with a pre-trained
+    ARIMA_PLUS model.
+  - **Behavioral anomaly detection** — uses
+    ``ML.DETECT_ANOMALIES`` with a pre-trained AUTOENCODER model
+    (no AI Operator equivalent for non-time-series anomaly
+    detection).
   """
 
-  # ARIMA model for latency anomaly detection
+  # ---- AI.DETECT_ANOMALIES (primary, no model training needed) ---- #
+
+  _AI_DETECT_LATENCY_ANOMALIES_QUERY = """
+  SELECT *
+  FROM AI.DETECT_ANOMALIES(
+    (
+      SELECT
+        TIMESTAMP_TRUNC(timestamp, HOUR) AS hour,
+        AVG(CAST(JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS FLOAT64)) AS avg_latency
+      FROM `{project}.{dataset}.{table}`
+      WHERE event_type = 'LLM_RESPONSE'
+        AND latency_ms IS NOT NULL
+        AND timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @training_days DAY)
+      GROUP BY hour
+      HAVING avg_latency IS NOT NULL
+    ),
+    (
+      SELECT
+        TIMESTAMP_TRUNC(timestamp, HOUR) AS hour,
+        AVG(CAST(JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS FLOAT64)) AS avg_latency
+      FROM `{project}.{dataset}.{table}`
+      WHERE timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @hours HOUR)
+        AND event_type = 'LLM_RESPONSE'
+        AND latency_ms IS NOT NULL
+      GROUP BY hour
+      HAVING avg_latency IS NOT NULL
+    ),
+    anomaly_prob_threshold => 0.95,
+    timestamp_col => 'hour',
+    data_col => 'avg_latency'
+  )
+  WHERE is_anomaly = TRUE
+  """
+
+  # ---- Legacy ML.DETECT_ANOMALIES (requires model training) ---- #
+
   _CREATE_LATENCY_MODEL_QUERY = """
   CREATE OR REPLACE MODEL `{project}.{dataset}.latency_anomaly_model`
   OPTIONS(
@@ -571,7 +693,7 @@ class AnomalyDetector:
   HAVING avg_latency IS NOT NULL
   """
 
-  _DETECT_LATENCY_ANOMALIES_QUERY = """
+  _LEGACY_DETECT_LATENCY_ANOMALIES_QUERY = """
   SELECT *
   FROM ML.DETECT_ANOMALIES(
     MODEL `{project}.{dataset}.latency_anomaly_model`,
@@ -591,7 +713,10 @@ class AnomalyDetector:
   WHERE is_anomaly = TRUE
   """
 
-  # Autoencoder for behavioral anomaly detection
+  # ---- Autoencoder for behavioral anomaly detection ---- #
+  # No AI Operator equivalent for non-time-series anomaly detection.
+  # This path requires model training via ML.DETECT_ANOMALIES.
+
   _CREATE_BEHAVIOR_MODEL_QUERY = """
   CREATE OR REPLACE MODEL `{project}.{dataset}.behavior_anomaly_model`
   OPTIONS(
@@ -643,6 +768,7 @@ class AnomalyDetector:
       dataset_id: str,
       table_id: str = "agent_events",
       client: Optional[bigquery.Client] = None,
+      use_legacy_anomaly_model: bool = False,
   ) -> None:
     """Initializes AnomalyDetector.
 
@@ -651,11 +777,16 @@ class AnomalyDetector:
         dataset_id: BigQuery dataset ID.
         table_id: BigQuery table ID.
         client: Optional BigQuery client.
+        use_legacy_anomaly_model: If True, uses the legacy
+            ``ML.DETECT_ANOMALIES`` path with a pre-trained ARIMA_PLUS
+            model for latency detection.  Defaults to False (uses
+            ``AI.DETECT_ANOMALIES`` with built-in TimesFM).
     """
     self.project_id = project_id
     self.dataset_id = dataset_id
     self.table_id = table_id
     self._client = client
+    self.use_legacy_anomaly_model = use_legacy_anomaly_model
 
   @property
   def client(self) -> bigquery.Client:
@@ -670,12 +801,24 @@ class AnomalyDetector:
   ) -> bool:
     """Trains the ARIMA model for latency anomaly detection.
 
+    Only needed when using the legacy ``ML.DETECT_ANOMALIES`` path
+    (``use_legacy_anomaly_model=True``).  The ``AI.DETECT_ANOMALIES``
+    primary path uses the built-in TimesFM model and requires no
+    training.
+
     Args:
         training_days: Days of historical data to train on.
 
     Returns:
-        True if training successful.
+        True if training successful or not needed.
     """
+    if not self.use_legacy_anomaly_model:
+      logger.info(
+          "AI.DETECT_ANOMALIES uses built-in TimesFM — "
+          "no model training needed."
+      )
+      return True
+
     query = self._CREATE_LATENCY_MODEL_QUERY.format(
         project=self.project_id,
         dataset=self.dataset_id,
@@ -707,26 +850,46 @@ class AnomalyDetector:
   async def detect_latency_anomalies(
       self,
       since_hours: int = 24,
+      training_days: int = 30,
   ) -> list[Anomaly]:
     """Detects latency anomalies in recent data.
 
+    Uses ``AI.DETECT_ANOMALIES`` (built-in TimesFM) by default.
+    Falls back to ``ML.DETECT_ANOMALIES`` with pre-trained ARIMA_PLUS
+    when ``use_legacy_anomaly_model`` is True.
+
     Args:
-        since_hours: Hours of data to analyze.
+        since_hours: Hours of recent data to evaluate for anomalies.
+        training_days: Days of historical data for baseline (used
+            by ``AI.DETECT_ANOMALIES`` as the historical window).
 
     Returns:
         List of detected anomalies.
     """
-    query = self._DETECT_LATENCY_ANOMALIES_QUERY.format(
-        project=self.project_id,
-        dataset=self.dataset_id,
-        table=self.table_id,
-    )
+    if self.use_legacy_anomaly_model:
+      query = self._LEGACY_DETECT_LATENCY_ANOMALIES_QUERY.format(
+          project=self.project_id,
+          dataset=self.dataset_id,
+          table=self.table_id,
+      )
+    else:
+      query = self._AI_DETECT_LATENCY_ANOMALIES_QUERY.format(
+          project=self.project_id,
+          dataset=self.dataset_id,
+          table=self.table_id,
+      )
 
-    job_config = bigquery.QueryJobConfig(
-        query_parameters=[
-            bigquery.ScalarQueryParameter("hours", "INT64", since_hours),
-        ]
-    )
+    params = [
+        bigquery.ScalarQueryParameter("hours", "INT64", since_hours),
+    ]
+    if not self.use_legacy_anomaly_model:
+      params.append(
+          bigquery.ScalarQueryParameter(
+              "training_days", "INT64", training_days
+          ),
+      )
+
+    job_config = bigquery.QueryJobConfig(query_parameters=params)
 
     loop = asyncio.get_event_loop()
     try:
@@ -740,14 +903,16 @@ class AnomalyDetector:
 
       anomalies = []
       for row in results:
-        hour = row.get("hour")
+        # AI.DETECT_ANOMALIES returns time_series_timestamp/time_series_data;
+        # legacy ML.DETECT_ANOMALIES returns hour/avg_latency.
+        hour = row.get("time_series_timestamp") or row.get("hour")
         if isinstance(hour, datetime):
           timestamp = hour
         else:
           timestamp = datetime.now(timezone.utc)
 
         anomaly_prob = row.get("anomaly_probability", 0.5)
-        avg_latency = row.get("avg_latency", 0)
+        avg_latency = row.get("time_series_data") or row.get("avg_latency") or 0
 
         anomalies.append(
             Anomaly(
