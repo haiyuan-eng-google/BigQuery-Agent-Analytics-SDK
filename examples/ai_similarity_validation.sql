@@ -19,30 +19,29 @@
 -- Note: results are directionally similar but not guaranteed to be
 -- numerically identical across implementations or model revisions.
 --
--- Replace {project}, {dataset}, {model_id}, and {table} with your values.
+-- Replace {project}, {dataset}, {endpoint}, and {table} with your values.
+-- {endpoint} is the embedding model endpoint, e.g. 'text-embedding-005'.
 
 -- 1. Current approach — AI.EMBED both sides, ML.DISTANCE on vectors
 WITH ground_truth_embedded AS (
   SELECT
     session_id,
     question,
-    ml_generate_embedding_result AS embedding
-  FROM AI.EMBED(
-    MODEL `{project}.{dataset}.{model_id}`,
-    (SELECT session_id, question FROM `{project}.{dataset}.{table}_ground_truth`),
-    STRUCT(TRUE AS flatten_json_output)
-  )
+    AI.EMBED(
+      question,
+      endpoint => '{endpoint}'
+    ) AS embedding
+  FROM `{project}.{dataset}.{table}_ground_truth`
 ),
 predicted_embedded AS (
   SELECT
     session_id,
     question,
-    ml_generate_embedding_result AS embedding
-  FROM AI.EMBED(
-    MODEL `{project}.{dataset}.{model_id}`,
-    (SELECT session_id, question FROM `{project}.{dataset}.{table}_predicted`),
-    STRUCT(TRUE AS flatten_json_output)
-  )
+    AI.EMBED(
+      question,
+      endpoint => '{endpoint}'
+    ) AS embedding
+  FROM `{project}.{dataset}.{table}_predicted`
 ),
 embed_distance AS (
   SELECT
@@ -61,27 +60,18 @@ FROM embed_distance
 ORDER BY gt_session_id, pred_session_id;
 
 -- 2. AI.SIMILARITY approach — direct text-to-text comparison
-WITH ai_sim AS (
-  SELECT
-    g.session_id AS gt_session_id,
-    p.session_id AS pred_session_id,
-    similarity
-  FROM
-    `{project}.{dataset}.{table}_ground_truth` g
-  CROSS JOIN
-    `{project}.{dataset}.{table}_predicted` p
-  CROSS JOIN
-    AI.SIMILARITY(
-      MODEL `{project}.{dataset}.{model_id}`,
-      g.question,
-      p.question
-    )
-)
 SELECT
-  gt_session_id,
-  pred_session_id,
-  similarity
-FROM ai_sim
+  g.session_id AS gt_session_id,
+  p.session_id AS pred_session_id,
+  AI.SIMILARITY(
+    content1 => g.question,
+    content2 => p.question,
+    endpoint => '{endpoint}'
+  ) AS similarity
+FROM
+  `{project}.{dataset}.{table}_ground_truth` g
+CROSS JOIN
+  `{project}.{dataset}.{table}_predicted` p
 ORDER BY gt_session_id, pred_session_id;
 
 -- 3. Agreement check — join both results, compute correlation & max diff
@@ -89,23 +79,21 @@ WITH ground_truth_embedded AS (
   SELECT
     session_id,
     question,
-    ml_generate_embedding_result AS embedding
-  FROM AI.EMBED(
-    MODEL `{project}.{dataset}.{model_id}`,
-    (SELECT session_id, question FROM `{project}.{dataset}.{table}_ground_truth`),
-    STRUCT(TRUE AS flatten_json_output)
-  )
+    AI.EMBED(
+      question,
+      endpoint => '{endpoint}'
+    ) AS embedding
+  FROM `{project}.{dataset}.{table}_ground_truth`
 ),
 predicted_embedded AS (
   SELECT
     session_id,
     question,
-    ml_generate_embedding_result AS embedding
-  FROM AI.EMBED(
-    MODEL `{project}.{dataset}.{model_id}`,
-    (SELECT session_id, question FROM `{project}.{dataset}.{table}_predicted`),
-    STRUCT(TRUE AS flatten_json_output)
-  )
+    AI.EMBED(
+      question,
+      endpoint => '{endpoint}'
+    ) AS embedding
+  FROM `{project}.{dataset}.{table}_predicted`
 ),
 embed_results AS (
   SELECT
@@ -119,17 +107,15 @@ ai_sim_results AS (
   SELECT
     g.session_id AS gt_session_id,
     p.session_id AS pred_session_id,
-    similarity AS similarity_from_ai
+    AI.SIMILARITY(
+      content1 => g.question,
+      content2 => p.question,
+      endpoint => '{endpoint}'
+    ) AS similarity_from_ai
   FROM
     `{project}.{dataset}.{table}_ground_truth` g
   CROSS JOIN
     `{project}.{dataset}.{table}_predicted` p
-  CROSS JOIN
-    AI.SIMILARITY(
-      MODEL `{project}.{dataset}.{model_id}`,
-      g.question,
-      p.question
-    )
 )
 SELECT
   CORR(e.similarity_from_embed, a.similarity_from_ai) AS pearson_correlation,
