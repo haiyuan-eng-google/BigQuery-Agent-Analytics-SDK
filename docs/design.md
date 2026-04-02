@@ -802,11 +802,29 @@ Direct wrappers around BigQuery's native ML capabilities:
 | Class | BigQuery Feature | Use Case |
 |-------|-----------------|----------|
 | `BigQueryAIClient` | `AI.GENERATE` | Text generation, trace analysis |
-| `EmbeddingSearchClient` | `ML.GENERATE_EMBEDDING` + vector distance | Semantic search over traces |
-| `AnomalyDetector` | `ML.DETECT_ANOMALIES` (ARIMA_PLUS, AUTOENCODER) | Latency spikes, behavioral anomalies |
+| `EmbeddingSearchClient` | `AI.EMBED` (scalar); legacy `ML.GENERATE_EMBEDDING` | Semantic search over traces |
+| `AnomalyDetector` | `AI.DETECT_ANOMALIES`, `AI.FORECAST` (TimesFM); legacy `ML.DETECT_ANOMALIES`, `ML.FORECAST` (ARIMA_PLUS); `ML.DETECT_ANOMALIES` (AUTOENCODER) | Latency anomalies, latency forecasting, behavioral anomalies |
 | `BatchEvaluator` | `AI.GENERATE` with `output_schema` | Batch session evaluation with persistence |
 
-**ARIMA latency model:**
+**AI.FORECAST latency (primary — no model training needed):**
+
+```sql
+SELECT *
+FROM AI.FORECAST(
+  (SELECT TIMESTAMP_TRUNC(timestamp, HOUR) AS hour,
+          AVG(CAST(JSON_VALUE(latency_ms, '$.total_ms') AS FLOAT64)) AS avg_latency
+   FROM `{table}`
+   WHERE event_type = 'LLM_RESPONSE'
+     AND timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @training_days DAY)
+   GROUP BY hour),
+  horizon => @horizon,
+  confidence_level => 0.95,
+  timestamp_col => 'hour',
+  data_col => 'avg_latency'
+)
+```
+
+**Legacy ARIMA latency model (requires `use_legacy_anomaly_model=True`):**
 
 ```sql
 CREATE OR REPLACE MODEL `{dataset}.latency_arima_model`

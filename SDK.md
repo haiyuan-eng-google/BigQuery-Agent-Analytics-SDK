@@ -1057,17 +1057,49 @@ detector = AnomalyDetector(
     dataset_id="agent_analytics",
 )
 
-# Train and detect latency anomalies (ARIMA model)
-await detector.train_latency_model(training_days=30)
+# Detect latency anomalies (AI.DETECT_ANOMALIES — no model training needed)
 anomalies = await detector.detect_latency_anomalies(since_hours=24)
 
 for a in anomalies:
     print(f"[{a.anomaly_type.value}] {a.description} "
           f"(severity={a.severity:.2f})")
 
-# Train and detect behavioral anomalies (Autoencoder model)
+# Behavioral anomalies still require model training (Autoencoder)
 await detector.train_behavior_model()
 behavior_anomalies = await detector.detect_behavior_anomalies(since_hours=24)
+```
+
+### Latency Forecasting
+
+```python
+from bigquery_agent_analytics import AnomalyDetector
+
+detector = AnomalyDetector(
+    project_id="my-project",
+    dataset_id="agent_analytics",
+)
+
+# Forecast future latency (AI.FORECAST — no model training needed)
+forecasts = await detector.forecast_latency(
+    horizon_hours=24,
+    training_days=30,
+    confidence_level=0.95,
+)
+
+# Filter successful points (status="" means success)
+for f in forecasts:
+    if not f.status:
+        print(f"[{f.timestamp}] predicted={f.forecast_value:.0f}ms "
+              f"[{f.lower_bound:.0f}, {f.upper_bound:.0f}]")
+
+# Legacy path: use ML.FORECAST with pre-trained ARIMA_PLUS model
+legacy_detector = AnomalyDetector(
+    project_id="my-project",
+    dataset_id="agent_analytics",
+    use_legacy_anomaly_model=True,
+)
+await legacy_detector.train_latency_model(training_days=30)
+legacy_forecasts = await legacy_detector.forecast_latency(horizon_hours=24)
 ```
 
 ### Batch Evaluation with AI.GENERATE

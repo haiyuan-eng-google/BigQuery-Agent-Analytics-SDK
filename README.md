@@ -24,7 +24,8 @@ a consumption-layer toolkit for agent observability at scale.
 - **Drift Detection** -- Compare golden vs production question distributions
 - **Agent Insights** -- Multi-stage pipeline for comprehensive session analysis
 - **Long-Horizon Memory** -- Cross-session context and semantic search
-- **BigQuery AI/ML Integration** -- AI.GENERATE, embeddings, anomaly detection
+- **BigQuery AI/ML Integration** -- AI.GENERATE, embeddings, anomaly detection,
+  latency forecasting
 - **Context Graph** -- Property Graph linking technical traces to business
   entities, with GQL traversal, world-change detection, and artifact lineage
 

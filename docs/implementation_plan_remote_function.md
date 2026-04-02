@@ -614,7 +614,7 @@ Complete mapping from interface operations to current SDK code:
 | Multi-Trial | `TrialRunner` | `multi_trial` |
 | Grader Pipeline | `GraderPipeline` | `grade` |
 | Memory Service | `BigQueryMemoryService` | (separate interface) |
-| Anomaly Detection | `AnomalyDetector` | `anomaly` |
+| Anomaly Detection & Forecasting | `AnomalyDetector` | `anomaly`, `forecast` |
 
 ---
 
