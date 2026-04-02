@@ -28,6 +28,7 @@ from bigquery_agent_analytics.ai_ml_integration import BatchEvaluator
 from bigquery_agent_analytics.ai_ml_integration import BigQueryAIClient
 from bigquery_agent_analytics.ai_ml_integration import EmbeddingResult
 from bigquery_agent_analytics.ai_ml_integration import EmbeddingSearchClient
+from bigquery_agent_analytics.ai_ml_integration import LatencyForecast
 
 
 class TestEmbeddingResult:
@@ -872,6 +873,161 @@ class TestAIDetectAnomaliesMigration:
     assert "AUTOENCODER" in AnomalyDetector._CREATE_BEHAVIOR_MODEL_QUERY
 
 
+class TestAIForecastMigration:
+  """Tests for AI.FORECAST integration."""
+
+  def test_ai_forecast_query_exists(self):
+    """AI.FORECAST query template is defined."""
+    assert hasattr(AnomalyDetector, "_AI_FORECAST_LATENCY_QUERY")
+    assert "AI.FORECAST" in AnomalyDetector._AI_FORECAST_LATENCY_QUERY
+
+  def test_ai_forecast_query_uses_named_params(self):
+    """AI.FORECAST template uses named parameter syntax."""
+    q = AnomalyDetector._AI_FORECAST_LATENCY_QUERY
+    assert "horizon =>" in q
+    assert "timestamp_col =>" in q
+    assert "data_col =>" in q
+
+  def test_legacy_forecast_query_preserved(self):
+    """Legacy ML.FORECAST template is preserved."""
+    assert hasattr(AnomalyDetector, "_LEGACY_FORECAST_LATENCY_QUERY")
+    q = AnomalyDetector._LEGACY_FORECAST_LATENCY_QUERY
+    assert "ML.FORECAST" in q
+    assert "MODEL" in q
+
+  @pytest.mark.asyncio
+  async def test_default_uses_ai_forecast(self):
+    """forecast_latency() uses AI.FORECAST by default."""
+    mock_bq = MagicMock()
+    mock_job = MagicMock()
+    mock_job.result.return_value = [
+        {
+            "time_series_timestamp": datetime(
+                2026, 4, 1, 12, tzinfo=timezone.utc
+            ),
+            "time_series_data": 250.0,
+            "prediction_interval_lower_bound": 200.0,
+            "prediction_interval_upper_bound": 300.0,
+            "ai_forecast_status": "",
+        },
+    ]
+    mock_bq.query.return_value = mock_job
+
+    detector = AnomalyDetector(
+        project_id="p",
+        dataset_id="d",
+        client=mock_bq,
+    )
+    forecasts = await detector.forecast_latency(horizon_hours=24)
+
+    assert len(forecasts) == 1
+    query_str = mock_bq.query.call_args[0][0]
+    assert "AI.FORECAST" in query_str
+    assert "ML.FORECAST" not in query_str
+
+  @pytest.mark.asyncio
+  async def test_legacy_flag_uses_ml_forecast(self):
+    """forecast_latency() uses ML.FORECAST with legacy flag."""
+    mock_bq = MagicMock()
+    mock_job = MagicMock()
+    mock_job.result.return_value = [
+        {
+            "forecast_timestamp": datetime(2026, 4, 1, 12, tzinfo=timezone.utc),
+            "forecast_value": 250.0,
+            "prediction_interval_lower_bound": 200.0,
+            "prediction_interval_upper_bound": 300.0,
+        },
+    ]
+    mock_bq.query.return_value = mock_job
+
+    detector = AnomalyDetector(
+        project_id="p",
+        dataset_id="d",
+        client=mock_bq,
+        use_legacy_anomaly_model=True,
+    )
+    forecasts = await detector.forecast_latency(horizon_hours=24)
+
+    assert len(forecasts) == 1
+    query_str = mock_bq.query.call_args[0][0]
+    assert "ML.FORECAST" in query_str
+
+  @pytest.mark.asyncio
+  async def test_forecast_result_parsing(self):
+    """Mock rows are parsed into LatencyForecast dataclasses."""
+    mock_bq = MagicMock()
+    mock_job = MagicMock()
+    ts = datetime(2026, 4, 1, 13, tzinfo=timezone.utc)
+    mock_job.result.return_value = [
+        {
+            "time_series_timestamp": ts,
+            "time_series_data": 320.5,
+            "prediction_interval_lower_bound": 280.0,
+            "prediction_interval_upper_bound": 360.0,
+            "ai_forecast_status": "",
+        },
+    ]
+    mock_bq.query.return_value = mock_job
+
+    detector = AnomalyDetector(
+        project_id="p",
+        dataset_id="d",
+        client=mock_bq,
+    )
+    forecasts = await detector.forecast_latency()
+
+    assert len(forecasts) == 1
+    f = forecasts[0]
+    assert isinstance(f, LatencyForecast)
+    assert f.timestamp == ts
+    assert f.forecast_value == 320.5
+    assert f.lower_bound == 280.0
+    assert f.upper_bound == 360.0
+    assert f.status == ""
+
+  @pytest.mark.asyncio
+  async def test_forecast_surfaces_failed_status(self):
+    """Rows with non-empty ai_forecast_status are included with status."""
+    mock_bq = MagicMock()
+    mock_job = MagicMock()
+    mock_job.result.return_value = [
+        {
+            "time_series_timestamp": datetime(
+                2026, 4, 1, 12, tzinfo=timezone.utc
+            ),
+            "time_series_data": 250.0,
+            "prediction_interval_lower_bound": 200.0,
+            "prediction_interval_upper_bound": 300.0,
+            "ai_forecast_status": "",
+        },
+        {
+            "time_series_timestamp": datetime(
+                2026, 4, 1, 13, tzinfo=timezone.utc
+            ),
+            "time_series_data": 0.0,
+            "prediction_interval_lower_bound": 0.0,
+            "prediction_interval_upper_bound": 0.0,
+            "ai_forecast_status": "Insufficient history for forecasting",
+        },
+    ]
+    mock_bq.query.return_value = mock_job
+
+    detector = AnomalyDetector(
+        project_id="p",
+        dataset_id="d",
+        client=mock_bq,
+    )
+    forecasts = await detector.forecast_latency()
+
+    assert len(forecasts) == 2
+    assert forecasts[0].status == ""
+    assert forecasts[0].forecast_value == 250.0
+    assert forecasts[1].status == "Insufficient history for forecasting"
+    # Callers filter with: [f for f in forecasts if not f.status]
+    ok = [f for f in forecasts if not f.status]
+    assert len(ok) == 1
+
+
 class TestModuleDocstring:
   """Guard tests for module-level docstring accuracy."""
 
@@ -886,3 +1042,9 @@ class TestModuleDocstring:
     import bigquery_agent_analytics.ai_ml_integration as mod
 
     assert "AI.SIMILARITY" in mod.__doc__
+
+  def test_docstring_mentions_ai_forecast(self):
+    """Docstring should mention AI.FORECAST."""
+    import bigquery_agent_analytics.ai_ml_integration as mod
+
+    assert "AI.FORECAST" in mod.__doc__

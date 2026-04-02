@@ -152,6 +152,7 @@ try:
   from .ai_ml_integration import BatchEvaluator
   from .ai_ml_integration import BigQueryAIClient
   from .ai_ml_integration import EmbeddingSearchClient
+  from .ai_ml_integration import LatencyForecast
 
   __all__.extend(
       [
@@ -159,6 +160,7 @@ try:
           "EmbeddingSearchClient",
           "AnomalyDetector",
           "BatchEvaluator",
+          "LatencyForecast",
       ]
   )
 except ImportError as e:

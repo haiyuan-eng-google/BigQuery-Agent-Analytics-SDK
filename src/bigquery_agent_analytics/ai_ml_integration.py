@@ -25,6 +25,10 @@ capabilities:
   built-in TimesFM model (no model training needed).  Falls back to
   legacy ``ML.DETECT_ANOMALIES`` with ARIMA_PLUS when
   ``use_legacy_anomaly_model`` is True.
+- AI.FORECAST: Time-series forecasting using the built-in TimesFM
+    model (no model training needed).  Falls back to legacy
+    ``ML.FORECAST`` with ARIMA_PLUS when ``use_legacy_anomaly_model``
+    is True.
 - ML.DETECT_ANOMALIES: Behavioral anomaly detection via AUTOENCODER
   (requires model training — no AI Operator equivalent).
 - ML.DISTANCE: Vector distance computation for pre-computed embeddings.
@@ -88,6 +92,28 @@ class Anomaly:
   description: str
   affected_sessions: list[str] = field(default_factory=list)
   details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class LatencyForecast:
+  """A single forecasted latency data point.
+
+  The ``status`` field carries the per-row ``ai_forecast_status``
+  returned by ``AI.FORECAST``.  An empty string means success;
+  any other value describes why the forecast failed for that row
+  (e.g. insufficient history).  ``ML.FORECAST`` rows always have
+  an empty status.
+
+  Callers that only need successful points can filter::
+
+      ok = [f for f in forecasts if not f.status]
+  """
+
+  timestamp: datetime
+  forecast_value: float
+  lower_bound: float
+  upper_bound: float
+  status: str = ""
 
 
 @dataclass
@@ -673,6 +699,29 @@ class AnomalyDetector:
   WHERE is_anomaly = TRUE
   """
 
+  # ---- AI.FORECAST (primary, no model training needed) ---- #
+
+  _AI_FORECAST_LATENCY_QUERY = """
+  SELECT *
+  FROM AI.FORECAST(
+    (
+      SELECT
+        TIMESTAMP_TRUNC(timestamp, HOUR) AS hour,
+        AVG(CAST(JSON_EXTRACT_SCALAR(latency_ms, '$.total_ms') AS FLOAT64)) AS avg_latency
+      FROM `{project}.{dataset}.{table}`
+      WHERE event_type = 'LLM_RESPONSE'
+        AND latency_ms IS NOT NULL
+        AND timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @training_days DAY)
+      GROUP BY hour
+      HAVING avg_latency IS NOT NULL
+    ),
+    horizon => @horizon,
+    confidence_level => @confidence_level,
+    timestamp_col => 'hour',
+    data_col => 'avg_latency'
+  )
+  """
+
   # ---- Legacy ML.DETECT_ANOMALIES (requires model training) ---- #
 
   _CREATE_LATENCY_MODEL_QUERY = """
@@ -713,6 +762,16 @@ class AnomalyDetector:
     )
   )
   WHERE is_anomaly = TRUE
+  """
+
+  # ---- Legacy ML.FORECAST (requires model training) ---- #
+
+  _LEGACY_FORECAST_LATENCY_QUERY = """
+  SELECT *
+  FROM ML.FORECAST(
+    MODEL `{project}.{dataset}.latency_anomaly_model`,
+    STRUCT(@horizon AS horizon, @confidence_level AS confidence_level)
+  )
   """
 
   # ---- Autoencoder for behavioral anomaly detection ---- #
@@ -937,6 +996,95 @@ class AnomalyDetector:
 
     except Exception as e:
       logger.warning("Latency anomaly detection failed: %s", e)
+      return []
+
+  async def forecast_latency(
+      self,
+      horizon_hours: int = 24,
+      training_days: int = 30,
+      confidence_level: float = 0.95,
+  ) -> list[LatencyForecast]:
+    """Forecasts future latency using time-series prediction.
+
+    Uses AI.FORECAST with built-in TimesFM by default.
+    Falls back to ML.FORECAST with ARIMA_PLUS when
+    ``use_legacy_anomaly_model`` is True (requires prior
+    ``train_latency_model()`` call).
+
+    Args:
+        horizon_hours: Number of hours to forecast.
+        training_days: Historical training window.
+        confidence_level: Prediction interval confidence.
+
+    Returns:
+        List of LatencyForecast points.
+    """
+    if self.use_legacy_anomaly_model:
+      query = self._LEGACY_FORECAST_LATENCY_QUERY.format(
+          project=self.project_id,
+          dataset=self.dataset_id,
+      )
+    else:
+      query = self._AI_FORECAST_LATENCY_QUERY.format(
+          project=self.project_id,
+          dataset=self.dataset_id,
+          table=self.table_id,
+      )
+
+    params = [
+        bigquery.ScalarQueryParameter("horizon", "INT64", horizon_hours),
+        bigquery.ScalarQueryParameter(
+            "confidence_level", "FLOAT64", confidence_level
+        ),
+    ]
+    if not self.use_legacy_anomaly_model:
+      params.append(
+          bigquery.ScalarQueryParameter(
+              "training_days", "INT64", training_days
+          ),
+      )
+
+    job_config = bigquery.QueryJobConfig(query_parameters=params)
+
+    loop = asyncio.get_event_loop()
+    try:
+      query_job = await loop.run_in_executor(
+          None,
+          lambda: self.client.query(query, job_config=job_config),
+      )
+      results = await loop.run_in_executor(
+          None, lambda: list(query_job.result())
+      )
+
+      forecasts: list[LatencyForecast] = []
+      for row in results:
+        # AI.FORECAST returns per-row ai_forecast_status (empty on success).
+        status = row.get("ai_forecast_status") or ""
+        if status:
+          logger.warning("AI.FORECAST row error (status: %s)", status)
+
+        ts = row.get("time_series_timestamp") or row.get("forecast_timestamp")
+        if not isinstance(ts, datetime):
+          ts = datetime.now(timezone.utc)
+
+        val = row.get("time_series_data") or row.get("forecast_value") or 0
+        lower = row.get("prediction_interval_lower_bound") or 0
+        upper = row.get("prediction_interval_upper_bound") or 0
+
+        forecasts.append(
+            LatencyForecast(
+                timestamp=ts,
+                forecast_value=float(val),
+                lower_bound=float(lower),
+                upper_bound=float(upper),
+                status=status,
+            )
+        )
+
+      return forecasts
+
+    except Exception as e:
+      logger.warning("Latency forecasting failed: %s", e)
       return []
 
   async def train_behavior_model(self) -> bool:
