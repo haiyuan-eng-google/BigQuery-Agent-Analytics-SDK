@@ -1031,6 +1031,18 @@ class TestAIForecastMigration:
 class TestModuleDocstring:
   """Guard tests for module-level docstring accuracy."""
 
+  def test_docstring_mentions_pre_computed_embeddings(self):
+    """ML.DISTANCE rationale should reference pre-computed embeddings."""
+    import bigquery_agent_analytics.ai_ml_integration as mod
+
+    assert "pre-computed embeddings" in mod.__doc__
+
+  def test_docstring_mentions_ai_similarity(self):
+    """Docstring should acknowledge AI.SIMILARITY existence."""
+    import bigquery_agent_analytics.ai_ml_integration as mod
+
+    assert "AI.SIMILARITY" in mod.__doc__
+
   def test_docstring_mentions_ai_forecast(self):
     """Docstring should mention AI.FORECAST."""
     import bigquery_agent_analytics.ai_ml_integration as mod
