@@ -827,7 +827,7 @@ FROM AI.FORECAST(
 **Legacy ARIMA latency model (requires `use_legacy_anomaly_model=True`):**
 
 ```sql
-CREATE OR REPLACE MODEL `{dataset}.latency_arima_model`
+CREATE OR REPLACE MODEL `{dataset}.latency_anomaly_model`
 OPTIONS(
     model_type = 'ARIMA_PLUS',
     time_series_timestamp_col = 'hour',
@@ -846,7 +846,7 @@ GROUP BY hour
 **Autoencoder behavioral model:**
 
 ```sql
-CREATE OR REPLACE MODEL `{dataset}.behavior_autoencoder_model`
+CREATE OR REPLACE MODEL `{dataset}.behavior_anomaly_model`
 OPTIONS(
     model_type = 'AUTOENCODER',
     activation_fn = 'RELU',
