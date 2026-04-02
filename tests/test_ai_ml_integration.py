@@ -983,10 +983,11 @@ class TestAIForecastMigration:
     assert f.forecast_value == 320.5
     assert f.lower_bound == 280.0
     assert f.upper_bound == 360.0
+    assert f.status == ""
 
   @pytest.mark.asyncio
-  async def test_forecast_skips_failed_status(self):
-    """Rows with non-empty ai_forecast_status are excluded."""
+  async def test_forecast_surfaces_failed_status(self):
+    """Rows with non-empty ai_forecast_status are included with status."""
     mock_bq = MagicMock()
     mock_job = MagicMock()
     mock_job.result.return_value = [
@@ -1018,8 +1019,13 @@ class TestAIForecastMigration:
     )
     forecasts = await detector.forecast_latency()
 
-    assert len(forecasts) == 1
+    assert len(forecasts) == 2
+    assert forecasts[0].status == ""
     assert forecasts[0].forecast_value == 250.0
+    assert forecasts[1].status == "Insufficient history for forecasting"
+    # Callers filter with: [f for f in forecasts if not f.status]
+    ok = [f for f in forecasts if not f.status]
+    assert len(ok) == 1
 
 
 class TestModuleDocstring:

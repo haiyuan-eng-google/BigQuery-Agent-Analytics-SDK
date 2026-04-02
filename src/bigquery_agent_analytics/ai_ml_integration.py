@@ -31,7 +31,9 @@ capabilities:
     is True.
 - ML.DETECT_ANOMALIES: Behavioral anomaly detection via AUTOENCODER
   (requires model training — no AI Operator equivalent).
-- ML.DISTANCE: Vector distance computation (no AI Operator equivalent).
+- ML.DISTANCE: Vector distance computation for pre-computed embeddings.
+    AI.SIMILARITY exists for text-to-text comparison but re-embeds per call,
+    making it O(N×M) in cross joins vs O(N+M) with AI.EMBED + ML.DISTANCE.
 - Batch evaluation using BigQuery's high-throughput ML inference
 
 Example usage:
@@ -94,12 +96,24 @@ class Anomaly:
 
 @dataclass
 class LatencyForecast:
-  """A single forecasted latency data point."""
+  """A single forecasted latency data point.
+
+  The ``status`` field carries the per-row ``ai_forecast_status``
+  returned by ``AI.FORECAST``.  An empty string means success;
+  any other value describes why the forecast failed for that row
+  (e.g. insufficient history).  ``ML.FORECAST`` rows always have
+  an empty status.
+
+  Callers that only need successful points can filter::
+
+      ok = [f for f in forecasts if not f.status]
+  """
 
   timestamp: datetime
   forecast_value: float
   lower_bound: float
   upper_bound: float
+  status: str = ""
 
 
 @dataclass
@@ -1047,8 +1061,7 @@ class AnomalyDetector:
         # AI.FORECAST returns per-row ai_forecast_status (empty on success).
         status = row.get("ai_forecast_status") or ""
         if status:
-          logger.warning("AI.FORECAST row skipped (status: %s)", status)
-          continue
+          logger.warning("AI.FORECAST row error (status: %s)", status)
 
         ts = row.get("time_series_timestamp") or row.get("forecast_timestamp")
         if not isinstance(ts, datetime):
@@ -1064,6 +1077,7 @@ class AnomalyDetector:
                 forecast_value=float(val),
                 lower_bound=float(lower),
                 upper_bound=float(upper),
+                status=status,
             )
         )
 
