@@ -924,6 +924,11 @@ class TestAIForecastMigration:
     query_str = mock_bq.query.call_args[0][0]
     assert "AI.FORECAST" in query_str
     assert "ML.FORECAST" not in query_str
+    # AI.FORECAST requires literal values — verify inlined, not parameterised.
+    assert "horizon => 24" in query_str
+    assert "confidence_level => 0.95" in query_str
+    assert "@horizon" not in query_str
+    assert "@confidence_level" not in query_str
 
   @pytest.mark.asyncio
   async def test_legacy_flag_uses_ml_forecast(self):
