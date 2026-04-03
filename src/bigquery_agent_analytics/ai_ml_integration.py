@@ -715,8 +715,8 @@ class AnomalyDetector:
       GROUP BY hour
       HAVING avg_latency IS NOT NULL
     ),
-    horizon => @horizon,
-    confidence_level => @confidence_level,
+    horizon => {horizon},
+    confidence_level => {confidence_level},
     timestamp_col => 'hour',
     data_col => 'avg_latency'
   )
@@ -1024,25 +1024,28 @@ class AnomalyDetector:
           project=self.project_id,
           dataset=self.dataset_id,
       )
+      params = [
+          bigquery.ScalarQueryParameter("horizon", "INT64", horizon_hours),
+          bigquery.ScalarQueryParameter(
+              "confidence_level", "FLOAT64", confidence_level
+          ),
+      ]
     else:
+      # AI.FORECAST requires literal values for named arguments
+      # (horizon, confidence_level), so they are inlined via .format().
+      # Only training_days stays as a query parameter (inner SELECT).
       query = self._AI_FORECAST_LATENCY_QUERY.format(
           project=self.project_id,
           dataset=self.dataset_id,
           table=self.table_id,
+          horizon=int(horizon_hours),
+          confidence_level=float(confidence_level),
       )
-
-    params = [
-        bigquery.ScalarQueryParameter("horizon", "INT64", horizon_hours),
-        bigquery.ScalarQueryParameter(
-            "confidence_level", "FLOAT64", confidence_level
-        ),
-    ]
-    if not self.use_legacy_anomaly_model:
-      params.append(
+      params = [
           bigquery.ScalarQueryParameter(
               "training_days", "INT64", training_days
           ),
-      )
+      ]
 
     job_config = bigquery.QueryJobConfig(query_parameters=params)
 

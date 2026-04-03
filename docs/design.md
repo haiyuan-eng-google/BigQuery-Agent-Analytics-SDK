@@ -817,7 +817,7 @@ FROM AI.FORECAST(
    WHERE event_type = 'LLM_RESPONSE'
      AND timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @training_days DAY)
    GROUP BY hour),
-  horizon => @horizon,
+  horizon => 24,
   confidence_level => 0.95,
   timestamp_col => 'hour',
   data_col => 'avg_latency'
