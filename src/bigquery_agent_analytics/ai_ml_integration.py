@@ -156,7 +156,7 @@ class BigQueryAIClient:
   SELECT
     result.*
   FROM AI.GENERATE(
-    prompt => @prompt,{connection_clause}
+    prompt => @prompt,
     endpoint => '{endpoint}',
     model_params => JSON '{{"temperature": {temperature}, "max_output_tokens": {max_tokens}}}'
   ) AS result
@@ -266,15 +266,10 @@ class BigQueryAIClient:
         Generated text.
     """
     ep = endpoint or self.endpoint
-    cid = connection_id or self.connection_id
-    connection_clause = ""
-    if cid:
-      connection_clause = f"\n    connection_id => '{cid}',"
     query = self._AI_GENERATE_QUERY.format(
         endpoint=ep,
         temperature=temperature,
         max_tokens=max_tokens,
-        connection_clause=connection_clause,
     )
 
     job_config = bigquery.QueryJobConfig(
@@ -1270,7 +1265,7 @@ class BatchEvaluator:
       '2. Efficiency\\n',
       '3. Tool usage\\n',
       'Trace:\\n', trace_text
-    ),{connection_clause}
+    ),
     endpoint => '{endpoint}',
     model_params => JSON '{{"temperature": 0.1, "max_output_tokens": 500}}',
     output_schema => 'task_completion INT64, efficiency INT64, tool_usage INT64'
@@ -1339,7 +1334,6 @@ class BatchEvaluator:
       client: Optional[bigquery.Client] = None,
       eval_model: Optional[str] = None,
       endpoint: Optional[str] = None,
-      connection_id: Optional[str] = None,
   ) -> None:
     """Initializes BatchEvaluator.
 
@@ -1352,13 +1346,11 @@ class BatchEvaluator:
             backward compatibility.
         endpoint: AI.GENERATE endpoint (default
             ``gemini-2.5-flash``).
-        connection_id: Optional BigQuery connection resource ID.
     """
     self.project_id = project_id
     self.dataset_id = dataset_id
     self.table_id = table_id
     self._client = client
-    self.connection_id = connection_id
     self.endpoint = endpoint or eval_model or self._DEFAULT_ENDPOINT
     # Keep eval_model for backward compatibility
     self.eval_model = eval_model or self.endpoint
@@ -1384,15 +1376,11 @@ class BatchEvaluator:
     Returns:
         List of BatchEvaluationResult objects.
     """
-    connection_clause = ""
-    if self.connection_id:
-      connection_clause = f"\n    connection_id => '{self.connection_id}',"
     query = self._BATCH_EVALUATION_QUERY.format(
         project=self.project_id,
         dataset=self.dataset_id,
         table=self.table_id,
         endpoint=self.endpoint,
-        connection_clause=connection_clause,
     )
 
     job_config = bigquery.QueryJobConfig(
