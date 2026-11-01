@@ -21,6 +21,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import types
 import urllib.parse
 
 import pytest
@@ -1831,6 +1832,19 @@ def test_bqca_date_window_check_rejects_broken_queries(replacements):
   assert _bqca_date_window_defects(sql)
 
 
+def _latest_calendar_date():
+  """Today, on the later of the local and the UTC calendars.
+
+  A `verified_date` is a UTC date, which west of UTC is a day ahead of the
+  local calendar in the evening, so a bound on it takes the later of the two
+  dates, as tools/validate_contracts.py does.
+  """
+  return max(
+      datetime.date.today(),
+      datetime.datetime.now(datetime.timezone.utc).date(),
+  )
+
+
 def test_bqca_block_datasource_invariants_and_live_attestation_are_recorded():
   """The published data source's required settings and live proof are pinned.
 
@@ -1944,10 +1958,11 @@ def test_bqca_block_datasource_invariants_and_live_attestation_are_recorded():
       "limitation": "mutable_external_report_requires_reverification_after_changes",
   }
   verified = datetime.date.fromisoformat(evidence["verified_date"])
-  assert (
-      datetime.date.fromisoformat(bqca["published_date"])
-      <= verified
-      <= datetime.date.today()
+  published = datetime.date.fromisoformat(bqca["published_date"])
+  latest = _latest_calendar_date()
+  assert published <= verified <= latest, (
+      f"verified_date {verified} is not between published_date {published}"
+      f" and today, {latest} (the later of the local and the UTC date)"
   )
 
   # The contract states the gate to pass after every publish, and points at
@@ -2028,6 +2043,102 @@ def test_bqca_block_datasource_invariants_and_live_attestation_are_recorded():
       )
       == 1
   )
+
+
+def _frozen_datetime(utc_now, utc_offset_hours):
+  """A stand-in for the `datetime` module, frozen at the UTC time `utc_now`.
+
+  Its local time zone is the fixed offset `utc_offset_hours` from UTC, as
+  US/Hawaii is UTC-10 all year (it keeps no daylight saving time).
+  """
+  instant = datetime.datetime.fromisoformat(utc_now)
+  local = datetime.timezone(datetime.timedelta(hours=utc_offset_hours))
+
+  class Date(datetime.date):
+
+    @classmethod
+    def today(cls):
+      return instant.astimezone(local).date()
+
+  class DateTime(datetime.datetime):
+
+    @classmethod
+    def now(cls, tz=None):
+      if tz is None:
+        return instant.astimezone(local).replace(tzinfo=None)
+      return instant.astimezone(tz)
+
+  return types.SimpleNamespace(
+      date=Date,
+      datetime=DateTime,
+      timedelta=datetime.timedelta,
+      timezone=datetime.timezone,
+  )
+
+
+# UTC times and local offsets: 03:47 UTC on 2026-11-01 is still 2026-10-31 in
+# US/Hawaii (UTC-10); noon UTC on 2026-10-31 is 2026-11-01 at UTC+14; and the
+# last second of 2026-10-31 in UTC is 2026-10-31 in US/Hawaii too.
+_UTC_AHEAD = ("2026-11-01T03:47:43+00:00", -10)
+_LOCAL_AHEAD = ("2026-10-31T12:00:00+00:00", 14)
+_BOTH_BEFORE = ("2026-10-31T23:59:59+00:00", -10)
+
+
+@pytest.mark.parametrize(
+    "clock, local_date, latest",
+    [
+        (_UTC_AHEAD, "2026-10-31", "2026-11-01"),
+        (("2026-11-01T03:47:43+00:00", 0), "2026-11-01", "2026-11-01"),
+        (_LOCAL_AHEAD, "2026-11-01", "2026-11-01"),
+        (_BOTH_BEFORE, "2026-10-31", "2026-10-31"),
+    ],
+    ids=["utc-ahead-of-hawaii", "utc", "local-ahead-of-utc", "both-before"],
+)
+def test_latest_calendar_date_is_the_later_of_the_local_and_utc_dates(
+    monkeypatch, clock, local_date, latest
+):
+  monkeypatch.setitem(globals(), "datetime", _frozen_datetime(*clock))
+
+  assert datetime.date.today().isoformat() == local_date
+  assert _latest_calendar_date().isoformat() == latest
+  # A day beyond both calendars is beyond the bound.
+  beyond = datetime.date.fromisoformat(latest) + datetime.timedelta(days=1)
+  assert not beyond <= _latest_calendar_date()
+
+
+@pytest.mark.parametrize(
+    "clock, holds",
+    [
+        (_UTC_AHEAD, True),
+        (("2026-11-01T03:47:43+00:00", 0), True),
+        (_LOCAL_AHEAD, True),
+        (_BOTH_BEFORE, False),
+        (("2026-10-31T23:59:59+00:00", 0), False),
+    ],
+    ids=[
+        "utc-ahead-of-hawaii",
+        "utc",
+        "local-ahead-of-utc",
+        "both-before-in-hawaii",
+        "both-before-in-utc",
+    ],
+)
+def test_live_attestation_holds_once_either_calendar_reaches_its_date(
+    monkeypatch, clock, holds
+):
+  """The verified_date 2026-11-01 is not in the future on either calendar.
+
+  In US/Hawaii the local date is still 2026-10-31 for the first ten hours of
+  2026-11-01 in UTC, the calendar of verified_date: the attestation holds
+  then, and fails only while both calendars are a day before it.
+  """
+  monkeypatch.setitem(globals(), "datetime", _frozen_datetime(*clock))
+
+  if holds:
+    test_bqca_block_datasource_invariants_and_live_attestation_are_recorded()
+  else:
+    with pytest.raises(AssertionError, match="is not between published_date"):
+      test_bqca_block_datasource_invariants_and_live_attestation_are_recorded()
 
 
 def test_bqca_chart_manifest_and_contract_mutation_detection():
@@ -4942,6 +5053,21 @@ def test_bqca_profile_is_documented_for_contributors_and_users():
   for relative, text in (("README.md", readme), ("USER_MANUAL.md", manual)):
     for event_type in BQCA_UNLOGGED_EVENT_TYPES:
       assert event_type not in text, f"{relative} names {event_type}"
+  # The live template has been synced (#559), so no page for users says that
+  # it still has generic column IDs or points at the issue that tracked it.
+  guide_path = "docs/guides/bqca-prompt-response-logging-manual.md"
+  guide = " ".join((ROOT / guide_path).read_text().split())
+  for relative, text in (
+      ("README.md", readme),
+      ("USER_MANUAL.md", manual),
+      (guide_path, guide),
+  ):
+    for phrase in (
+        "issues/559",
+        "still uses generic column IDs",
+        "legacy generic column IDs",
+    ):
+      assert phrase not in text, f"{relative} still says {phrase!r}"
 
 
 def test_staleness_parser_rejects_malformed_or_nested_attestations(capsys):

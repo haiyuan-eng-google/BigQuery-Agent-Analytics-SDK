@@ -644,19 +644,29 @@ warning.
 
 `bindings/bqca_live_capture_signers` lists the trusted keys in the OpenSSH
 allowed signers format (see `ssh-keygen(1)`), one line per maintainer who
-exports the live template with the internal report tooling:
+exports the live template with the internal report tooling, in exactly this
+form:
 
 ```text
 <signer> namespaces="bqca-live-capture-receipt" <key type> <public key>
 ```
 
 `<signer>` is a public name, for example a GitHub username: letters, digits,
-`.`, `_`, `@`, `+`, or `-`, never a pattern. A line is added, changed, or
-removed only in a reviewed change; no command-line option or environment
-variable names another signers file. Only receipts signed by a key listed in
-`bindings/bqca_live_capture_signers` are trusted (`haiyuan-eng-google` is
-listed for the `sync_generation: 1` capture of #559). Anyone can check a
-receipt by hand:
+`.`, `_`, `@`, `+`, or `-`. ssh-keygen also reads a pattern (`*`, `?`), a
+comma-separated list, or a quoted name there, takes other options (or none)
+that widen what a line trusts, and accepts a second line for the same signer
+with another key. So the tools trust no receipt unless every line that is not
+blank or a `#` comment has one literal `<signer>`, exactly that `namespaces`
+option, a plain key type (`ssh-ed25519`, `ssh-rsa`, `ecdsa-sha2-nistp256`,
+`ecdsa-sha2-nistp384`, `ecdsa-sha2-nistp521`, `sk-ssh-ed25519@openssh.com`,
+or `sk-ecdsa-sha2-nistp256@openssh.com`; never a certificate), and a base64
+key, with at most a key comment after it, and no two lines list the same
+signer in any letter case. To change a signer's key, replace that signer's
+line. A line is added, changed, or removed only in a reviewed change; no
+command-line option or environment variable names another signers file. Only
+receipts signed by a key listed in `bindings/bqca_live_capture_signers` are
+trusted (`haiyuan-eng-google` is listed for the `sync_generation: 1` capture
+of #559). Anyone can check a receipt by hand:
 
 ```bash
 ssh-keygen -Y verify -f bindings/bqca_live_capture_signers -I <signer> \
@@ -684,7 +694,11 @@ three back (or removes a receipt that was new) if that audit fails, raises, or
 is interrupted. It reads each export, receipt, and signature once: the checks
 below, both audits (through a private, read-only copy of the export), and the
 recorded digests use those bytes, never the paths again. With nothing pending,
-it exits 0 and writes nothing.
+it writes nothing but still runs the audit, which checks the binding, its
+committed receipt, and that receipt's signature and signer along with the
+export: it exits 0 (`nothing to finalize`) only if the audit passes, and 1 if
+it fails. It refuses a binding without a `live_template_verification` mapping,
+exiting 1.
 
 A write fails closed, exiting 1 and leaving every file unchanged, unless:
 
@@ -742,7 +756,7 @@ tracking issue instead of editing the export.
 ##### The committed receipt and the sync generation
 
 `live_template_verification.sync_generation` numbers the live syncs of the
-template. It is 1 for the sync that #559 tracks; whoever reopens a finalized
+template. It is 1 for the sync that #559 tracked; whoever reopens a finalized
 sync (adds `pending_live_sync` again) also sets it to the next generation, and
 it stays when finalize records the sync. Both capture receipts carry the
 generation, and finalize writes only with receipts for the binding's.
@@ -822,15 +836,59 @@ The tool does not edit documentation or tests. In the same change, commit the
 binding with `bindings/bqca_live_capture_receipt.json` and its signature,
 which it wrote (they hold no secret; both exports stay private), and the line
 that lists the signer in `bindings/bqca_live_capture_signers` if it is new;
-remove the #559 known-issue notes that `pending_live_sync.required_actions`
-lists (and run `tools/render_web_config.py`); update the comments above
-`live_template_verification`; and update the tests in
+remove the known-issue notes that `pending_live_sync.required_actions` listed
+(and run `tools/render_web_config.py` if `docs/index.html` changed); update the
+comments above `live_template_verification`; and update the tests in
 `tests/test_looker_studio_dashboard.py` that pin the pending sync:
 `test_bqca_block_datasource_invariants_and_live_attestation_are_recorded`,
 `test_validate_contracts_requires_a_pending_live_sync_record`,
 `test_validate_contracts_rejects_generic_or_repeated_column_ids`, and
 `test_validate_contracts_cli_rejects_a_column_id_that_is_not_derived`. Then
-check the token scorecards of a report created with the 1-click link.
+check that each scorecard of the synced template shows its own field's value
+over the bound query, in a report created with the 1-click link, and record
+the dated result in the comments above `live_template_verification`, as for
+the check below.
+
+##### Post-sync scorecard check (2026-11-01)
+
+After the `sync_generation: 1` sync (live revision `1793504835696`), the 13
+scorecards of pages 1 to 3 were checked on 2026-11-01:
+
+- The signed capture after the write-back gives each scorecard its own
+  concept: a `qt_` ID of its own on its own field (all 65 concepts of the
+  report are distinct).
+- `DataStudioWebService.CreateTempReport` with the Linking API (the 1-click
+  link's copy, `ds0` on a fresh schema) created a copy without error.
+- `DataStudioWebService.BatchedDataV2` (`VIEW` mode, dates `20200101` to
+  `20261231`) on the live template, whose `ds0` reads the canonical sentinel
+  table, returned for each scorecard the value that BigQuery gives for its
+  field over the bound query (`sql/bqca_events_v1.template.sql`) for the same
+  table and dates.
+- On a hydrated BQCA Prompt & Response Logging table (13,054 rows from
+  2026-07-31 to 2026-10-22; dates `20250101` to `20261101`), BigQuery gives the
+  values in the last column, which a report created with the 1-click link for
+  that table must show for those dates.
+
+| Page | Scorecard | Concept | Field, aggregation | Sentinel table (BatchedDataV2 and BigQuery) | Hydrated table (BigQuery) |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Total Tokens | `qt_d779815a` | `total_tokens`, SUM | 39,146,504 | 59,097,881 |
+| 1 | Input Tokens | `qt_c90b69a4` | `input_tokens`, SUM | 32,708,861 | 57,677,125 |
+| 1 | Output Tokens | `qt_893d21f1` | `output_tokens`, SUM | 6,437,643 | 364,388 |
+| 1 | Thinking Tokens | `qt_a6d27140` | `thoughts_tokens`, SUM | null (no values) | 1,047,032 |
+| 1 | Cached Tokens | `qt_31dd80a8` | `cached_tokens`, SUM | null (no values) | 1,147,570 |
+| 2 | Active Data Agents | `qt_a96c5e06` | `data_agent_id`, COUNT_DISTINCT | 1 | 3 |
+| 2 | Total Turns | `qt_d206edb0` | `invocation_id`, COUNT_DISTINCT | 14,100 | 2,041 |
+| 2 | Completed Turns | `qt_f0daf8fa` | `completed_turn_id`, COUNT_DISTINCT | 14,093 | 2,039 |
+| 2 | Generated SQL Queries | `qt_d4c2022b` | `extracted_sql`, COUNT | 0 | 0 |
+| 3 | LLM Responses | `qt_581cc2cf` | `llm_latency_ms`, COUNT | 15,604 | 2,876 |
+| 3 | Avg LLM Call Latency (ms) | `qt_f4c85165` | `llm_latency_ms`, AVG | 5,941.28 | 7,429.72 |
+| 3 | Avg Time to First Token (ms) | `qt_1444bfec` | `ttft_ms`, AVG | 762.83 | 7,429.71 |
+| 3 | Suggested Columns Proposed | `qt_291ed8e1` | `similar_queries_count`, SUM | null (no values) | null (no values) |
+
+The five token sums differ from each other on the hydrated table, and on the
+sentinel table all but the two empty ones (Thinking and Cached Tokens) do, so
+a token scorecard that showed another one's value, as copies made before the
+sync could, would not match.
 
 ### Fallback paths
 

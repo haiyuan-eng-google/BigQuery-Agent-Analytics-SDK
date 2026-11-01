@@ -114,12 +114,14 @@ _SPEC_REFERENCE_PATHS = {
 # the BQCA manifest and bundle to have a `qt_` ID that matches this, is unique
 # across the whole report, and is its slot's derived ID
 # (`bqca_derive_report_column_ids`). Looker Studio itself also accepts generic
-# names: the live template keeps its legacy generic IDs (`met`, `dim`, `m0`,
-# `d0`, ...), with which components on one page of a report created through
-# the 1-click link can show each other's values, until it is synced from these
-# contracts. `live_template_verification.pending_live_sync` in
-# `bindings/bqca_report_template.yaml` tracks that sync, and reports copied
-# before it must be re-created after it.
+# names: until its generation-1 sync on 2026-11-01, the live template had
+# generic IDs (`met`, `dim`, `m0`, `d0`, ...), with which components on one
+# page of a report created through the 1-click link could show each other's
+# values. Reports copied before that sync must be re-created. Whenever these
+# contracts change ahead of the live template again,
+# `live_template_verification.pending_live_sync` in
+# `bindings/bqca_report_template.yaml` records the reopened sync until
+# `tools/finalize_live_sync.py` finalizes it.
 _QT_COLUMN_ID_RE = re.compile(r"^qt_[a-z0-9]{3,10}$")
 # The digest prefix lengths, in hex digits, that a derived column ID may take.
 _QT_DERIVED_HEX_LENGTHS = (8, 9, 10)
@@ -1750,6 +1752,21 @@ _BQCA_CAPTURE_TIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 # the signers file, never a pattern (`*`, `?`, `!`, `,`).
 BQCA_CAPTURE_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}")
 BQCA_CAPTURE_SIGNER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}")
+# The key types that a line of BQCA_CAPTURE_SIGNERS_PATH may list: plain
+# public keys, never certificates.
+BQCA_CAPTURE_SIGNER_KEY_TYPES = (
+    "ssh-ed25519",
+    "ssh-rsa",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "sk-ssh-ed25519@openssh.com",
+    "sk-ecdsa-sha2-nistp256@openssh.com",
+)
+_BASE64_RE = re.compile(r"[A-Za-z0-9+/]+={0,2}")
+# What a signer line may hold: printable ASCII and tabs, so that `str.split`
+# splits it into fields where ssh-keygen does (at spaces and tabs).
+_SIGNERS_LINE_RE = re.compile(r"[\t\x20-\x7e]*")
 
 
 def bqca_sync_generation(live: Any) -> int | None:
@@ -1859,14 +1876,92 @@ def parse_bqca_capture_receipt(data: bytes) -> dict[str, Any]:
   return receipt
 
 
+def bqca_capture_signers_error(signers: bytes) -> str | None:
+  """Return why the signers file `signers` trusts no receipt, or None.
+
+  `signers` is the bytes of BQCA_CAPTURE_SIGNERS_PATH, which `ssh-keygen -Y
+  verify` reads as an allowed signers file. ssh-keygen reads the principal
+  field of a line as a list of patterns (`*`, `?`, `!`, `,`) and takes
+  options that widen the namespaces or the keys that a line trusts, so one
+  line could trust a key for every signer's receipts, and a second line for a
+  listed signer could trust another key in that signer's name. So each line
+  must be blank, a comment (`#` after any spaces or tabs), or exactly
+
+    <signer> namespaces="bqca-live-capture-receipt" <key type> <public key>
+
+  optionally followed by a key comment: one literal principal that
+  BQCA_CAPTURE_SIGNER_RE matches (not quoted), that option and no other, one
+  of BQCA_CAPTURE_SIGNER_KEY_TYPES and a base64 key. A signer line holds only
+  printable ASCII and tabs, so its fields are the ones that ssh-keygen reads.
+  No principal is listed twice, in any letter case, and at least one is
+  listed. The file must be UTF-8 text; like ssh-keygen, this splits it into
+  lines at each line feed, and drops a carriage return that ends a line.
+  """
+  try:
+    text = signers.decode("utf-8")
+  except UnicodeDecodeError as exc:
+    return (
+        f"{BQCA_CAPTURE_SIGNERS_PATH} is not UTF-8 text ({exc}), so it trusts"
+        " no receipt"
+    )
+  option = f'namespaces="{BQCA_CAPTURE_NAMESPACE}"'
+  listed: dict[str, int] = {}
+  for number, line in enumerate(text.split("\n"), start=1):
+    line = line.removesuffix("\r")
+    content = line.strip(" \t\r")
+    if not content or content.startswith("#"):
+      continue
+    fields = line.split()
+    principal = fields[0].lower() if fields else ""
+    if not _SIGNERS_LINE_RE.fullmatch(line):
+      problem = "it holds a character that is not printable ASCII or a tab"
+    elif not BQCA_CAPTURE_SIGNER_RE.fullmatch(fields[0]):
+      problem = (
+          f"its principal {fields[0]!r} is not the literal name of one signer"
+          " (a pattern, a list or a quoted name is refused)"
+      )
+    elif len(fields) > 1 and fields[1] in BQCA_CAPTURE_SIGNER_KEY_TYPES:
+      problem = f"it has no options, not {option}"
+    elif len(fields) < 4:
+      problem = "it does not have the signer, option, key type and key fields"
+    elif fields[1] != option:
+      problem = f"its options {fields[1]!r} are not exactly {option}"
+    elif fields[2] not in BQCA_CAPTURE_SIGNER_KEY_TYPES:
+      problem = (
+          f"its key type {fields[2]!r} is not one of"
+          f" {', '.join(BQCA_CAPTURE_SIGNER_KEY_TYPES)}"
+      )
+    elif not _BASE64_RE.fullmatch(fields[3]):
+      problem = "its public key is not base64"
+    elif principal in listed:
+      problem = (
+          f"it lists the signer {fields[0]!r} again (line"
+          f" {listed[principal]} lists it, ignoring letter case)"
+      )
+    else:
+      listed[principal] = number
+      continue
+    return (
+        f"{BQCA_CAPTURE_SIGNERS_PATH} line {number}: {problem}; each signer is"
+        f" listed once, as '<signer> {option} <key type> <public key>', so the"
+        " file trusts no receipt"
+    )
+  if not listed:
+    return (
+        f"{BQCA_CAPTURE_SIGNERS_PATH} lists no signer, so it trusts no receipt"
+    )
+  return None
+
+
 def bqca_capture_signature_error(
     data: bytes, signature: bytes, signer: str, signers: bytes
 ) -> str | None:
   """Return why `signature` is not a trusted signature of the receipt `data`.
 
-  Runs `ssh-keygen -Y verify` in BQCA_CAPTURE_NAMESPACE for the identity
-  `signer`, on private copies of `signature` and of `signers`, the bytes of
-  BQCA_CAPTURE_SIGNERS_PATH. Returns None if the signature verifies.
+  Checks `signers`, the bytes of BQCA_CAPTURE_SIGNERS_PATH, with
+  `bqca_capture_signers_error`, then runs `ssh-keygen -Y verify` in
+  BQCA_CAPTURE_NAMESPACE for the identity `signer`, on private copies of
+  `signature` and of `signers`. Returns None if the signature verifies.
   """
   ssh_keygen = shutil.which("ssh-keygen")
   if ssh_keygen is None:
@@ -1874,13 +1969,9 @@ def bqca_capture_signature_error(
         "cannot verify the receipt's signature: ssh-keygen (OpenSSH 8.2 or"
         " later) is not on PATH"
     )
-  if not any(
-      line.strip() and not line.lstrip().startswith(b"#")
-      for line in signers.splitlines()
-  ):
-    return (
-        f"{BQCA_CAPTURE_SIGNERS_PATH} lists no signer, so it trusts no receipt"
-    )
+  error = bqca_capture_signers_error(signers)
+  if error is not None:
+    return error
   with tempfile.TemporaryDirectory(prefix="bqca_capture_signature_") as private:
     signers_copy = pathlib.Path(private) / "allowed_signers"
     signature_copy = pathlib.Path(private) / "receipt.sig"
@@ -2675,7 +2766,15 @@ def validate_bqca(
         "bqca dashboard_template_bundle datasource.sql_sha256 mismatch"
     )
 
-  live = binding.get("live_template_verification", {})
+  live = binding.get("live_template_verification")
+  if not isinstance(live, dict):
+    errors.append(
+        "bqca live_template_verification is missing"
+        if "live_template_verification" not in binding
+        else "bqca live_template_verification is a"
+        f" {type(live).__name__}, not a mapping"
+    )
+    live = {}
   if binding.get("reviewed_template_sql", {}).get("sha256") != sql_sha:
     errors.append("bqca reviewed_template_sql.sha256 mismatch")
   if live.get("repository_sql_sha256") != sql_sha:

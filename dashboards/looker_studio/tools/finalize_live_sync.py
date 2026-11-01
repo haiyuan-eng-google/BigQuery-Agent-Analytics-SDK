@@ -81,10 +81,16 @@ This tool does not edit documentation or tests. See "Finalizing the live
 template sync" in ``docs/dashboard-implementation.md`` for the rest of the
 change.
 
-Exits 0 when the binding is finalized or already is, and with ``--check``
-when the audit passes, even if a write would be refused (the output says
-why); 1 when the audit fails or the binding cannot be finalized; 2 on bad
-arguments.
+A binding without ``pending_live_sync`` is already finalized, or never had a
+sync pending, so nothing is written; the audit still runs, checking the
+binding, its committed receipt and that receipt's signature and signer along
+with the dump, and only its pass is reported as nothing to finalize. A
+binding without a ``live_template_verification`` mapping is refused.
+
+Exits 0 when the binding is finalized, or already is and the audit passes,
+and with ``--check`` when the audit passes, even if a write would be refused
+(the output says why); 1 when the audit fails or the binding cannot be
+finalized; 2 on bad arguments.
 """
 
 import argparse
@@ -163,15 +169,16 @@ In the same change:
     bindings/bqca_live_capture_signers if it is new; keep both exports
     privately: verified_dump_sha256 is the SHA-256 of the one after the
     write-back;
-  - remove the #559 known-issue notes: #bqca-column-id-note in
-    docs/index.html (then run tools/render_web_config.py), the BQCA notes in
-    README.md and USER_MANUAL.md, and the section 7.4 troubleshooting row in
-    docs/guides/bqca-prompt-response-logging-manual.md;
+  - remove the known-issue notes that pending_live_sync.required_actions
+    listed before this tool removed it (and run tools/render_web_config.py
+    if docs/index.html changed);
   - update the comments above live_template_verification in
     bindings/bqca_report_template.yaml and the tests that pin the pending
     sync (listed in docs/dashboard-implementation.md);
-  - create a report with the 1-click link and check that its Total, Input,
-    Output and Thinking Tokens scorecards each show their own value."""
+  - create a report with the 1-click link, check that its Total, Input,
+    Output and Thinking Tokens scorecards each show their own field's value
+    (the sum of that field over the bound query), and record the dated
+    result in the comments above live_template_verification."""
 
 _ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -1126,10 +1133,36 @@ def _finalize_snapshot(
   binding = yaml.safe_load(original)
   binding = binding if isinstance(binding, dict) else {}
   live = binding.get(LIVE_KEY)
-  if not isinstance(live, dict) or PENDING_KEY not in live:
+  if not isinstance(live, dict):
+    state = (
+        "is missing"
+        if LIVE_KEY not in binding
+        else f"is a {type(live).__name__}, not a mapping"
+    )
+    print(
+        f"not finalized: {LIVE_KEY} in {BINDING_PATH} {state}, so it records"
+        f" no live sync to finalize or check; {unchanged}",
+        file=sys.stderr,
+    )
+    return 1
+  if PENDING_KEY not in live:
+    # Nothing is pending, so nothing is written: the binding records a live
+    # sync that is already finalized. The audit checks that record (the
+    # binding, its committed receipt, the receipt's signature and signer)
+    # with the dump, so nothing to finalize is reported only if both pass.
+    code = _audit(audited)
+    if code != 0:
+      print(
+          f"not finalized: {BINDING_PATH} has no {LIVE_KEY}.{PENDING_KEY},"
+          f" but {VALIDATOR_PATH} exited {code} on {args.dump}, so the live"
+          f" sync that it records is not confirmed; {unchanged}",
+          file=sys.stderr,
+      )
+      return 1
     print(
         f"nothing to finalize: {BINDING_PATH} has no"
-        f" {LIVE_KEY}.{PENDING_KEY}; it is unchanged"
+        f" {LIVE_KEY}.{PENDING_KEY}, and the live audit of {args.dump}"
+        " passed; it is unchanged"
     )
     return 0
 
