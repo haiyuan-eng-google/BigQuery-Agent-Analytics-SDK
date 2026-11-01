@@ -36,7 +36,7 @@ a dump of the live template, offline, and writes the remapped dump with the
 
 The finalize and capture tests run the tools from a copy of
 `dashboards/looker_studio`, so they never write to the repository, and list a
-test key in the copy's signers file (the repository's lists none). A stand-in
+test key in the copy's signers file. A stand-in
 export command prints a file, as the internal export command prints the live
 report: before the write-back, the sanitized pre-sync cut with a
 `report_config.shareable` entry; after it, a dump that `_render_dump`
@@ -445,13 +445,11 @@ def tree(request, tmp_path, signing_keys):
   assert _live(copy_root)[PENDING]["since_date"] == SINCE_DATE
   repository = {
       relative: (DASHBOARD / relative).read_bytes()
-      for relative in (BINDING, SIGNERS)
+      for relative in (BINDING, SIGNERS, COMMITTED, f"{COMMITTED}.sig")
   }
-  assert not (DASHBOARD / COMMITTED).exists()
   yield copy_root
   for relative, data in repository.items():
     assert (DASHBOARD / relative).read_bytes() == data, relative
-  assert not (DASHBOARD / COMMITTED).exists()
 
 
 @pytest.fixture
@@ -2137,8 +2135,15 @@ def test_finalize_refuses_a_stale_or_future_receipt(
 
 
 def _without_signers(tree):
-  """Give the copy the repository's signers file, which lists no signer."""
-  shutil.copyfile(DASHBOARD / SIGNERS, tree / SIGNERS)
+  """Give the copy a signers file that lists no signer."""
+  lines = [
+      line
+      for line in (DASHBOARD / SIGNERS)
+      .read_text(encoding="utf-8")
+      .splitlines(True)
+      if not line.strip() or line.lstrip().startswith("#")
+  ]
+  (tree / SIGNERS).write_text("".join(lines), encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -3635,7 +3640,7 @@ def test_validate_contracts_refuses_a_hand_sync_whatever_pending_says(
   """Round 8: `pending_live_sync: null` no longer bypasses the receipt check.
 
   With both digests re-pinned, the stale `verified_date` kept, no committed
-  receipt and the shipped signers file, which lists no signer, the binding
+  receipt and no signer listed in the copy's signers file, the binding
   fails validation whether `pending_live_sync` is gone or present with any
   value that is not a well-formed mapping.
   """

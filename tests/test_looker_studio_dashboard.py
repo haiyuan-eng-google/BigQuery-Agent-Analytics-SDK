@@ -1175,10 +1175,10 @@ BQCA_DATASOURCE_ID = "70e5ac1e-65bb-4c89-a9df-fa9990cb6029"
 RETIRED_BQCA_DATASOURCE_ID_SHA256 = (
     "dab46990e866e28766d6d686428437120f5ba12773da5e4894e9f0d131213fa2"
 )
-# The manifest and JSON bundle digests that were pinned when the live template
-# was last verified (2026-10-09). The repository has changed both since, so
-# `live_template_verification.pending_live_sync` records the live sync that is
-# still to happen, tracked on BQCA_LIVE_SYNC_ISSUE.
+# The manifest and JSON bundle digests that were pinned for the 2026-10-09
+# verification before the 2026-11-01 live sync (#559). Used by tests that
+# exercise `pending_live_sync` validation when the pinned and verified digests
+# differ.
 BQCA_LIVE_VERIFIED_MANIFEST_SHA256 = (
     "a6b4effd99d59097d3c014cf6242a4f2750da8622e7ad71a03b8f5585a486054"
 )
@@ -1189,6 +1189,32 @@ BQCA_LIVE_SYNC_ISSUE = (
     "https://github.com/GoogleCloudPlatform/BigQuery-Agent-Analytics-SDK"
     "/issues/559"
 )
+
+
+def _with_pending_live_sync(binding_copy):
+  """Return `binding_copy` with a pre-sync `pending_live_sync` record."""
+  live = binding_copy["live_template_verification"]
+  for key in (
+      "verified_revision",
+      "verified_dump_sha256",
+      "capture_receipt_sha256",
+      "captured_by",
+  ):
+    live.pop(key, None)
+  live["verified_date"] = "2026-10-09"
+  live["verified_manifest_sha256"] = BQCA_LIVE_VERIFIED_MANIFEST_SHA256
+  live["verified_template_bundle_sha256"] = BQCA_LIVE_VERIFIED_BUNDLE_SHA256
+  live["pending_live_sync"] = {
+      "reason": (
+          "The live template has not been synced with the contract change."
+      ),
+      "since_date": "2026-10-29",
+      "tracking_issue": BQCA_LIVE_SYNC_ISSUE,
+      "required_actions": ["Sync the live template."],
+  }
+  return binding_copy
+
+
 BQCA_DATASOURCE_ALIAS = "ds0"
 BQCA_DEFAULT_TABLE = "bqca_prompt_response_logs"
 SHARED_SENTINELS = (
@@ -1847,22 +1873,41 @@ def test_bqca_block_datasource_invariants_and_live_attestation_are_recorded():
       bqca["block_datasource"]["parameter_configuration"]
   )
 
-  # The live evidence names the exact SQL, pages, manifest, and JSON bundle it was gathered for.
+  # The live evidence names the exact SQL, pages, manifest, and JSON bundle it was gathered for,
+  # and the signed capture receipt of the 2026-11-01 live sync (#559).
   assert bqca["reviewed_template_sql"]["sha256"] == digest
-  # The manifest and bundle it was gathered for are the `verified_*` digests.
-  # Both have changed since, so their pinned digests differ, and a pending
-  # live sync is recorded until the live template matches them again.
+  receipt_bytes = (
+      DASHBOARD / "bindings/bqca_live_capture_receipt.json"
+  ).read_bytes()
+  receipt = validator.parse_bqca_capture_receipt(receipt_bytes)
+  assert (
+      validator.bqca_capture_signature_error(
+          receipt_bytes,
+          (
+              DASHBOARD / "bindings/bqca_live_capture_receipt.json.sig"
+          ).read_bytes(),
+          receipt["signer"],
+          (DASHBOARD / "bindings/bqca_live_capture_signers").read_bytes(),
+      )
+      is None
+  )
   evidence = dict(bqca["live_template_verification"])
-  pending = evidence.pop("pending_live_sync")
+  assert "pending_live_sync" not in evidence
   assert evidence == {
       "sync_generation": 1,
-      "verified_date": "2026-10-09",
+      "verified_date": "2026-11-01",
       "repository_sql_sha256": digest,
       "pages_sha256": pages_digest,
       "manifest_sha256": manifest_digest,
       "template_bundle_sha256": bundle_digest,
-      "verified_manifest_sha256": BQCA_LIVE_VERIFIED_MANIFEST_SHA256,
-      "verified_template_bundle_sha256": BQCA_LIVE_VERIFIED_BUNDLE_SHA256,
+      "verified_manifest_sha256": manifest_digest,
+      "verified_template_bundle_sha256": bundle_digest,
+      "verified_revision": "1793504835696",
+      "verified_dump_sha256": (
+          "7d0a64974f20d0412bd56a2e6c4a410bb85f7d7ae7798f434846bcf8358c1f86"
+      ),
+      "capture_receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+      "captured_by": "haiyuan-eng-google",
       "method": [
           "data_studio_web_service_publish_datasource",
           "data_studio_web_service_get_block_datasource",
@@ -1904,34 +1949,6 @@ def test_bqca_block_datasource_invariants_and_live_attestation_are_recorded():
       <= verified
       <= datetime.date.today()
   )
-  assert manifest_digest != BQCA_LIVE_VERIFIED_MANIFEST_SHA256
-  assert bundle_digest != BQCA_LIVE_VERIFIED_BUNDLE_SHA256
-  # The pending sync gives its reason, its start, its tracking issue, and the
-  # actions that end it: the exact qt_ IDs, the copy's own data source, and a
-  # clean live audit before the record is removed.
-  assert list(pending) == [
-      "reason",
-      "since_date",
-      "tracking_issue",
-      "required_actions",
-  ]
-  assert pending["reason"].strip()
-  assert pending["since_date"] == "2026-10-29"
-  assert (
-      verified
-      <= datetime.date.fromisoformat(pending["since_date"])
-      <= datetime.date.today()
-  )
-  assert pending["tracking_issue"] == BQCA_LIVE_SYNC_ISSUE
-  rename, repoint, reverify = pending["required_actions"]
-  assert "exact qt_ IDs in spec/bqca_chart_manifest.yaml" in rename
-  assert repoint.endswith(f"datasource_id to {BQCA_DATASOURCE_ID}.")
-  assert "--live-report-textproto" in reverify
-  assert "README.md" in reverify
-  assert "USER_MANUAL.md" in reverify
-  assert "docs/guides/bqca-prompt-response-logging-manual.md" in reverify
-  assert "#bqca-column-id-note" in reverify
-  assert reverify.endswith("remove pending_live_sync.")
 
   # The contract states the gate to pass after every publish, and points at
   # the evidence of the last run.
@@ -2269,7 +2286,7 @@ def test_validate_contracts_rejects_generic_or_repeated_column_ids():
     m_copy = json.loads(json.dumps(manifest))
     b_copy = json.loads(json.dumps(bundle))
     mutate_documents(m_copy, b_copy)
-    repinned = json.loads(json.dumps(binding))
+    repinned = _with_pending_live_sync(json.loads(json.dumps(binding)))
     live = repinned["live_template_verification"]
     live["manifest_sha256"] = hashlib.sha256(
         yaml.safe_dump(m_copy, sort_keys=False).encode("utf-8")
@@ -2592,7 +2609,7 @@ def test_validate_contracts_rejects_generic_or_repeated_column_ids():
     m_dup = json.loads(json.dumps(manifest))
     b_dup = json.loads(json.dumps(bundle))
     c_dup = json.loads(json.dumps(contract))
-    bi_dup = json.loads(json.dumps(binding))
+    bi_dup = _with_pending_live_sync(json.loads(json.dumps(binding)))
     for doc in (m_dup, b_dup):
       for collection in (
           [c for p in doc["pages"] for c in p["components"]],
@@ -3060,7 +3077,9 @@ BQCA_PENDING_LIVE_SYNC_CASES = [
 
 
 @pytest.mark.parametrize("edit, expected", BQCA_PENDING_LIVE_SYNC_CASES)
-def test_validate_contracts_requires_a_pending_live_sync_record(edit, expected):
+def test_validate_contracts_requires_a_pending_live_sync_record(
+    edit, expected, tmp_path
+):
   """#check-can-fail: an unverified live state is recorded, exactly.
 
   While the pinned manifest or bundle digest differs from the one the live
@@ -3072,11 +3091,21 @@ def test_validate_contracts_requires_a_pending_live_sync_record(edit, expected):
   a finalized binding).
   """
   validator = _load_dashboard_module("validate_contracts")
-  binding = yaml.safe_load(
-      (DASHBOARD / "bindings/bqca_report_template.yaml").read_text()
+  for relative in BQCA_CONTRACT_FILES:
+    if relative.startswith("bindings/bqca_live_capture_"):
+      continue
+    (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(DASHBOARD / relative, tmp_path / relative)
+  binding = _with_pending_live_sync(
+      yaml.safe_load(
+          (DASHBOARD / "bindings/bqca_report_template.yaml").read_text()
+      )
   )
   edit(binding["live_template_verification"])
-  assert validator.validate_bqca(binding_override=binding) == expected
+  assert (
+      validator.validate_bqca(root=tmp_path, binding_override=binding)
+      == expected
+  )
 
 
 def _bqca_generation_binding(generation, pending):
@@ -3149,6 +3178,9 @@ def test_validate_contracts_checks_that_the_sync_generation_moves_forward(
 
 
 BQCA_CONTRACT_FILES = (
+    "bindings/bqca_live_capture_receipt.json",
+    "bindings/bqca_live_capture_receipt.json.sig",
+    "bindings/bqca_live_capture_signers",
     "bindings/bqca_report_template.yaml",
     "spec/bqca_chart_manifest.yaml",
     "spec/bqca_compatibility_profile.json",
@@ -3176,22 +3208,24 @@ def test_validate_contracts_cli_rejects_a_column_id_that_is_not_derived(
   assert capsys.readouterr().out == "ok: contracts validated (bqca)\n"
 
   binding_path = tmp_path / "bindings/bqca_report_template.yaml"
-  binding_bytes = binding_path.read_bytes()
+  binding_data = _with_pending_live_sync(
+      yaml.safe_load(binding_path.read_text())
+  )
   # The column ID and its primaryMetricId; the manifest's top-level list
   # aliases its page components, and the bundle's repeats them.
-  for relative, occurrences in (
-      ("spec/bqca_chart_manifest.yaml", 2),
-      ("spec/bqca_dashboard_template.json", 4),
+  for relative, digest_key, occurrences in (
+      ("spec/bqca_chart_manifest.yaml", "manifest_sha256", 2),
+      ("spec/bqca_dashboard_template.json", "template_bundle_sha256", 4),
   ):
     path = tmp_path / relative
     original = path.read_bytes()
     assert original.count(b"qt_d779815a") == occurrences, relative
     path.write_bytes(original.replace(b"qt_d779815a", b"qt_deadbeef"))
-    old_digest = hashlib.sha256(original).hexdigest().encode()
-    new_digest = hashlib.sha256(path.read_bytes()).hexdigest().encode()
-    assert binding_bytes.count(old_digest) == 1, relative
-    binding_bytes = binding_bytes.replace(old_digest, new_digest)
-  binding_path.write_bytes(binding_bytes)
+    new_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    binding_data["live_template_verification"][digest_key] = new_digest
+  binding_path.write_text(
+      yaml.safe_dump(binding_data, sort_keys=False), encoding="utf-8"
+  )
 
   assert validator.main(["--profile", "bqca"]) == 1
   assert capsys.readouterr().err.splitlines() == [
@@ -4507,10 +4541,10 @@ def test_bqca_deep_link_page_is_published_with_the_site():
   assert "2026-10-09" in note
   assert "Dedicated 7-page tool-free BQCA Looker Studio template" in note
   assert '<details class="advanced-bqca-options">' in note
-  assert 'id="bqca-column-id-note"' in note
-  assert BQCA_LIVE_SYNC_ISSUE in note
-  assert "legacy generic column IDs" in note
-  assert "re-create any report created" in note
+  assert 'id="bqca-column-id-note"' not in page
+  assert 'id="bqca-column-id-note"' not in bqca_page
+  assert BQCA_LIVE_SYNC_ISSUE not in page
+  assert BQCA_LIVE_SYNC_ISSUE not in bqca_page
   assert BQCA_REPORT_ID in note
   assert "dashboards/looker_studio/sql/bqca_events_v1.sql.tmpl" in note
   assert "--profile bqca --custom-sql-out" in note

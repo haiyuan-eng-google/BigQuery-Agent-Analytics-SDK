@@ -161,12 +161,6 @@ so external access is not yet verified. External Google accounts that see
 (`dashboards/streamlit/`) or export the custom query with `--custom-sql-out`
 into their own Looker Studio report.
 
-**Known issue ([#559](https://github.com/GoogleCloudPlatform/BigQuery-Agent-Analytics-SDK/issues/559)).**
-The template still uses generic column IDs, so components on one page of a
-report you create from it can show each other's values. After the live
-template sync (#559), re-create any report you created before it from the
-1-click link.
-
 Because BQCA logs no tool calls, all tool-usage pages, tool-latency charts,
 and tool-error panels are omitted:
 

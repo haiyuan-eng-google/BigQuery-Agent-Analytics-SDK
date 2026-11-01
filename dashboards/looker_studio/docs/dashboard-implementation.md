@@ -237,10 +237,12 @@ separate, dedicated 7-page tool-free Looker Studio report template
 copy that its owner made on 2026-10-09 of the first published BQCA template,
 whose organization allowed sharing only inside the organization. The copy's
 `BlockDatasource` ID and its `ds0` alias were re-recorded on 2026-10-29 from
-the copy's report configuration; the live verification evidence was recorded
-on the source report and has not been re-recorded for the copy. The owner
-turned on public link sharing for the copy on 2026-10-09; the copy check from
-a signed-in outside Google account is still pending.
+the copy's report configuration, and on 2026-11-01 the live template's 65
+concepts and report-level `datasource_id` were synced from the repository
+contracts and verified at revision `1793504835696`
+([#559](https://github.com/GoogleCloudPlatform/BigQuery-Agent-Analytics-SDK/issues/559)).
+The owner turned on public link sharing for the copy on 2026-10-09; the copy
+check from a signed-in outside Google account is still pending.
 
 ### Contract and manifest artifacts
 
@@ -257,13 +259,17 @@ a signed-in outside Google account is still pending.
   with explicit `top`, `left`, `width`, `height` coordinates inside
   12-column page sections), dimensions, metrics, and the 41-field remediated
   `BlockDatasource` schema.
-- **Report template binding**: `bindings/bqca_report_template.yaml` and
-  `bindings/bqca_template_bindings.yaml` pin the report ID, `ds0` alias,
+- **Report template binding**: `bindings/bqca_report_template.yaml`,
+  `bindings/bqca_template_bindings.yaml`, and
+  `bindings/bqca_live_capture_receipt.json` (plus `.sig` and
+  `bindings/bqca_live_capture_signers`) pin the report ID, `ds0` alias,
   sentinel replacement identifiers, `reviewed_template_sql.sha256`,
-  `live_template_verification` (`repository_sql_sha256`, `pages_sha256`,
-  `manifest_sha256`, `template_bundle_sha256`, the
-  `verified_manifest_sha256` and `verified_template_bundle_sha256` digests of
-  the last live verification, and `pending_live_sync`), and
+  `live_template_verification` (`sync_generation`, `verified_date`,
+  `repository_sql_sha256`, `pages_sha256`, `manifest_sha256`,
+  `template_bundle_sha256`, `verified_manifest_sha256`,
+  `verified_template_bundle_sha256`, `verified_revision`,
+  `verified_dump_sha256`, `capture_receipt_sha256`, `captured_by`, and
+  `pending_live_sync` whenever a contract change is awaiting a live sync), and
   `external_access_verification`.
 - **Contract validator**: `python3 tools/validate_contracts.py --profile bqca`
   verifies 1:1 parity across `spec/bqca_product_contract.yaml`,
@@ -302,12 +308,13 @@ This repository requires every column (concept) of the BQCA manifest and
 bundle to have a `qt_` ID, `qt_` followed by 3 to 10 lowercase letters or
 digits (`^qt_[a-z0-9]{3,10}$`), that is unique across the whole report. This
 is the repository's convention, not a Looker Studio rule: Looker Studio also
-accepts generic names, and the live template
-(`42e79a1f-a979-4de8-911f-80d5a99543d5`) still reuses generic IDs across its
-34 components (`met`, `dim`, `m0`..`m3`, `d0`..`d9`). With those IDs,
-components on the same page of a report created from it with the 1-click link
-can show each other's values: for example, the Total, Input, Output, and
-Thinking Tokens scorecards can all sum `total_tokens`.
+accepts generic names, and before the 2026-11-01 live sync
+([#559](https://github.com/GoogleCloudPlatform/BigQuery-Agent-Analytics-SDK/issues/559))
+the live template (`42e79a1f-a979-4de8-911f-80d5a99543d5`) reused generic IDs
+across its 34 components (`met`, `dim`, `m0`..`m3`, `d0`..`d9`). With those
+IDs, components on the same page of a report created from it with the 1-click
+link could show each other's values: for example, the Total, Input, Output, and
+Thinking Tokens scorecards could all sum `total_tokens`.
 
 The repository contracts, `spec/bqca_chart_manifest.yaml` and
 `spec/bqca_dashboard_template.json`, give each of the 65 column slots the ID
@@ -353,26 +360,25 @@ collides with it, and each such change needs the live sync described below.
   of its pages, in page order;
 - two scorecards on one page that show the same `(field, aggregation)`.
 
-The live template keeps its legacy generic IDs, and its report-level
-`datasource_id` still names the source report's data source, until it is
-synced from these contracts
-([#559](https://github.com/GoogleCloudPlatform/BigQuery-Agent-Analytics-SDK/issues/559)).
-The sync must rename the 65 concepts of its 34 components to exactly the `qt_`
-IDs in `spec/bqca_chart_manifest.yaml`, keeping each concept's source field
-and aggregation and updating every `concept_names` and `sort_column` that
-refers to it, and repoint the report-level `datasource_id` to
-`70e5ac1e-65bb-4c89-a9df-fa9990cb6029`. The live audit below compares names
-exactly, so it fails on any other name. Until the sync,
-`live_template_verification` in `bindings/bqca_report_template.yaml` keeps
-`verified_date: "2026-10-09"` and the `verified_manifest_sha256` and
-`verified_template_bundle_sha256` digests of that verification, and
-`pending_live_sync` records the sync (`reason`, `since_date`,
-`tracking_issue`, and `required_actions`). The validator requires
-`pending_live_sync` while `manifest_sha256` or `template_bundle_sha256`
-differs from its verified digest, and rejects it once both match again. A
-report copied from the template before the sync can keep the generic IDs it
-was copied with, so after the sync, re-create any such report from the
-1-click link.
+On 2026-11-01 (`sync_generation: 1`, revision `1793504835696`,
+[#559](https://github.com/GoogleCloudPlatform/BigQuery-Agent-Analytics-SDK/issues/559)),
+the live template was synced from these contracts: all 65 concepts of its 34
+components were renamed to the exact `qt_` IDs in `spec/bqca_chart_manifest.yaml`
+(keeping each concept's source field and aggregation and updating every
+`concept_names` and `sort_column` that refers to it), and its report-level
+`datasource_id` was repointed to `70e5ac1e-65bb-4c89-a9df-fa9990cb6029`. The
+live audit below compares names exactly, so it fails on any other name. Whenever
+a contract change alters `manifest_sha256` or `template_bundle_sha256` before
+the live template is re-synced, `live_template_verification` in
+`bindings/bqca_report_template.yaml` keeps the `verified_date`,
+`verified_manifest_sha256`, and `verified_template_bundle_sha256` digests of the
+last live verification, increments `sync_generation`, and adds
+`pending_live_sync` (`reason`, `since_date`, `tracking_issue`, and
+`required_actions`). The validator requires `pending_live_sync` while
+`manifest_sha256` or `template_bundle_sha256` differs from its verified digest,
+and rejects it once both match again. A report copied from the template before
+the 2026-11-01 sync can keep the generic IDs it was copied with, so any such
+report should be re-created from the 1-click link.
 
 To audit the live template itself, save a Looker Studio report textproto dump
 of it (its report configuration in protobuf text format) and run:
@@ -647,9 +653,10 @@ exports the live template with the internal report tooling:
 `<signer>` is a public name, for example a GitHub username: letters, digits,
 `.`, `_`, `@`, `+`, or `-`, never a pattern. A line is added, changed, or
 removed only in a reviewed change; no command-line option or environment
-variable names another signers file. The file lists no signer yet, so no
-receipt is trusted, and no write can finalize the binding until a reviewed
-change lists one. Anyone can check a receipt by hand:
+variable names another signers file. Only receipts signed by a key listed in
+`bindings/bqca_live_capture_signers` are trusted (`haiyuan-eng-google` is
+listed for the `sync_generation: 1` capture of #559). Anyone can check a
+receipt by hand:
 
 ```bash
 ssh-keygen -Y verify -f bindings/bqca_live_capture_signers -I <signer> \
