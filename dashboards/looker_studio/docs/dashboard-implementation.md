@@ -857,19 +857,24 @@ scorecards of pages 1 to 3 were checked on 2026-11-01:
 - The signed capture after the write-back gives each scorecard its own
   concept: a `qt_` ID of its own on its own field (all 65 concepts of the
   report are distinct).
-- `DataStudioWebService.CreateTempReport` with the Linking API (the 1-click
-  link's copy, `ds0` on a fresh schema) created a copy without error.
-- `DataStudioWebService.BatchedDataV2` (`VIEW` mode, dates `20200101` to
-  `20261231`) on the live template, whose `ds0` reads the canonical sentinel
-  table, returned for each scorecard the value that BigQuery gives for its
+- `DataStudioWebService.CreateTempReport` with the Linking API, with the
+  options of the 1-click link for the BQCA profile
+  (`ds.ds0.refreshFields=false`: `creation_type: LINKING_API`,
+  `datasource_alias: "ds0"`, `use_fresh_schema: false`, `fix_fields: false`,
+  `connector_block_config.alias: "t0"` and `use_datetime_type: true`), created
+  a fresh copy of the live template for each of two tables: the canonical
+  sentinel table (dates `20200101` to `20261231`) and a hydrated BQCA Prompt &
+  Response Logging table (13,054 rows from 2026-07-31 to 2026-10-22; dates
+  `20250101` to `20261101`). Each fresh copy took the template's published
+  `BlockDatasource` schema and its `DS_START_DATE` and `DS_END_DATE` parameter
+  configuration, and has all 65 distinct `qt_` concepts.
+- `DataStudioWebService.BatchedDataV2` (`VIEW` mode) on each fresh copy
+  returned for each scorecard the exact value that BigQuery gives for its
   field over the bound query (`sql/bqca_events_v1.template.sql`) for the same
-  table and dates.
-- On a hydrated BQCA Prompt & Response Logging table (13,054 rows from
-  2026-07-31 to 2026-10-22; dates `20250101` to `20261101`), BigQuery gives the
-  values in the last column, which a report created with the 1-click link for
-  that table must show for those dates.
+  table and dates. On the live template, whose `ds0` reads the sentinel table,
+  it returned the same values as on the sentinel table's fresh copy.
 
-| Page | Scorecard | Concept | Field, aggregation | Sentinel table (BatchedDataV2 and BigQuery) | Hydrated table (BigQuery) |
+| Page | Scorecard | Concept | Field, aggregation | Sentinel table (fresh copy BatchedDataV2 and BigQuery) | Hydrated table (fresh copy BatchedDataV2 and BigQuery) |
 | --- | --- | --- | --- | --- | --- |
 | 1 | Total Tokens | `qt_d779815a` | `total_tokens`, SUM | 39,146,504 | 59,097,881 |
 | 1 | Input Tokens | `qt_c90b69a4` | `input_tokens`, SUM | 32,708,861 | 57,677,125 |

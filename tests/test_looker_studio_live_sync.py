@@ -243,7 +243,11 @@ def _ssh_environment():
 
 @pytest.fixture(scope="session")
 def signing_keys(tmp_path_factory):
-  """Two passphrase-less ed25519 key files, by name: trusted and untrusted."""
+  """Two passphrase-less ed25519 key files, by name: trusted and untrusted.
+
+  A test that needs ssh-keygen but none of these keys lists the fixture in
+  `usefixtures`, so that it is skipped where ssh-keygen is not installed.
+  """
   if SSH_KEYGEN is None:
     pytest.skip("ssh-keygen (OpenSSH) is not installed")
   directory = tmp_path_factory.mktemp("keys")
@@ -3920,9 +3924,7 @@ def test_validate_contracts_checks_the_committed_receipt_of_a_finalized_binding(
     assert _snapshot(tree) == edited
 
 
-@pytest.mark.skipif(
-    SSH_KEYGEN is None, reason="ssh-keygen (OpenSSH) is not installed"
-)
+@pytest.mark.usefixtures("signing_keys")
 @pytest.mark.parametrize(
     "fixture, errors",
     [(GENERIC_DUMP, 209), (REMAPPED_DUMP, 0)],
@@ -4060,13 +4062,31 @@ def test_finalize_refuses_a_signers_line_that_widens_what_it_trusts(
   assert _snapshot(tree) == before_snapshot
 
 
-# A key that the parser of the signers file reads: it checks only that the
-# key is base64, and ssh-keygen checks the key itself.
-_PARSER_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIParserTestKey0123+/=="
+# A key that the parser of the signers file reads: it checks that the key is
+# canonical base64 (this one is the key blob of an ed25519 key of 32 arbitrary
+# bytes), and ssh-keygen checks the key itself.
+_PARSER_KEY = (
+    "ssh-ed25519"
+    " AAAAC3NzaC1lZDI1NTE5AAAAIFBhcnNlclRlc3RLZXkwMTIzNDU2Nzg5YWJjZGVmMDEy"
+)
 _SIGNERS_FORM = (
     f"each signer is listed once, as '<signer> {_STRICT_OPTION} <key type>"
     " <public key>', so the file trusts no receipt"
 )
+# Public keys that ssh-keygen refuses as `invalid key` on the line of the
+# signer that it verifies, and that a base64 shape alone accepts: `A`, `AA`,
+# `AAA` and `AAAAA` are not whole groups of four characters, `A=` is padded
+# wrongly, `AB==` has bits after its last byte that are not zero, and the
+# canonical key of _PARSER_KEY with one more `=` has padding it does not need.
+_NON_CANONICAL_KEYS = {
+    "one-character": "A",
+    "one-character-padded": "A=",
+    "two-characters": "AA",
+    "three-characters": "AAA",
+    "five-characters": "AAAAA",
+    "bits-after-the-last-byte": "AB==",
+    "extra-padding": f"{_PARSER_KEY.split()[1]}=",
+}
 
 
 @pytest.mark.parametrize(
@@ -4114,6 +4134,15 @@ _SIGNERS_FORM = (
             f"{SIGNERS} line 1: its public key is not base64; {_SIGNERS_FORM}",
             id="key-not-base64",
         ),
+        *[
+            pytest.param(
+                f"{SIGNER} {_STRICT_OPTION} ssh-ed25519 {key}\n",
+                f"{SIGNERS} line 1: its public key is not base64;"
+                f" {_SIGNERS_FORM}",
+                id=f"key-{name}",
+            )
+            for name, key in _NON_CANONICAL_KEYS.items()
+        ],
         pytest.param(
             f"{SIGNER} {_STRICT_OPTION} ssh-ed25519\n",
             f"{SIGNERS} line 1: it does not have the signer, option, key type"
@@ -4145,9 +4174,11 @@ def test_signers_file_lists_each_signer_once_in_one_strict_form(signers, error):
 
   Blank lines, comments, carriage returns before line feeds, tabs between
   fields and key comments are allowed; any other option or option spelling,
-  a certificate key type, a key that is not base64, a missing field, a signer
-  listed again in other capitals, a character that ssh-keygen would not
-  split at, or a file with no signer is refused.
+  a certificate key type, a key that is not canonical base64 (not whole
+  groups of four characters, padded wrongly, or with bits after its last
+  byte), a missing field, a signer listed again in other capitals, a
+  character that ssh-keygen would not split at, or a file with no signer is
+  refused.
   """
   validator = _load_validator()
 
@@ -4164,15 +4195,111 @@ def test_signers_file_must_be_utf_8():
   assert error.endswith("), so it trusts no receipt")
 
 
-def test_the_committed_signers_file_is_strict_and_trusts_the_committed_receipt():
+@pytest.mark.parametrize(
+    "key", list(_NON_CANONICAL_KEYS.values()), ids=list(_NON_CANONICAL_KEYS)
+)
+def test_a_key_that_is_not_canonical_base64_stops_the_check_before_ssh_keygen(
+    monkeypatch, key
+):
+  """A signers file with such a key is refused before ssh-keygen runs.
+
+  The first line lists SIGNER, as the committed file lists its signer; the
+  second lists another principal with a key that ssh-keygen refuses but never
+  reads while it verifies for SIGNER, so only the parser of the file can stop
+  it. `shutil.which` finds an ssh-keygen and `subprocess.run` is a spy, so the
+  test needs no OpenSSH and fails if the check gets as far as running it.
+  """
   validator = _load_validator()
+  runs = []
+
+  def spy(*args, **kwargs):
+    runs.append((args, kwargs))
+    raise AssertionError("ssh-keygen ran on a signers file that is refused")
+
+  monkeypatch.setattr(validator, "subprocess", types.SimpleNamespace(run=spy))
+  monkeypatch.setattr(
+      validator, "shutil", types.SimpleNamespace(which=lambda name: name)
+  )
+  signers = (
+      f"{SIGNER} {_STRICT_OPTION} {_PARSER_KEY}\n"
+      f"other-signer {_STRICT_OPTION} ssh-ed25519 {key}\n"
+  ).encode("utf-8")
+
+  error = validator.bqca_capture_signature_error(
+      b"receipt", b"signature", SIGNER, signers
+  )
+
+  assert error == (
+      f"{SIGNERS} line 2: its public key is not base64; {_SIGNERS_FORM}"
+  )
+  assert not runs
+
+
+@pytest.mark.parametrize(
+    "key", list(_NON_CANONICAL_KEYS.values()), ids=list(_NON_CANONICAL_KEYS)
+)
+@pytest.mark.usefixtures("signing_keys")
+def test_a_key_that_is_not_canonical_base64_fails_validate_and_finalize(
+    tmp_path, key
+):
+  """A second signer's key that is not canonical base64 fails every audit.
+
+  The repository's binding is finalized, and its committed receipt is signed
+  by its signer, whom the signers file lists with a valid key: the copy
+  validates. A new line then lists another principal, SIGNER, with a key that
+  ssh-keygen refuses but never reads while it verifies the receipt for the
+  committed signer, so ssh-keygen alone still accepts the receipt. The
+  validator and finalize, with --check and in a write, refuse the file, name
+  its line, and write nothing.
+  """
+  copy_root = tmp_path / "repo/dashboards/looker_studio"
+  shutil.copytree(
+      DASHBOARD, copy_root, ignore=shutil.ignore_patterns("__pycache__")
+  )
+  assert PENDING not in _live(copy_root)
+  control = _validate(copy_root)
+  assert control.returncode == 0, control.stdout + control.stderr
+  with (copy_root / SIGNERS).open("a", encoding="utf-8") as handle:
+    handle.write(f"{SIGNER} {_STRICT_OPTION} ssh-ed25519 {key}\n")
+  number = len((copy_root / SIGNERS).read_text(encoding="utf-8").splitlines())
+  error = (
+      f"{SIGNERS} line {number}: its public key is not base64; {_SIGNERS_FORM}"
+  )
+  edited = _snapshot(copy_root)
+
+  result = _validate(copy_root)
+
+  assert result.returncode == 1, result.stdout + result.stderr
+  assert f"bqca live_template_verification: {COMMITTED}: {error}" in (
+      result.stderr
+  )
+  for args in (["--check"], _write_args(GENERIC_DUMP)):
+    again = _finalize(copy_root, *args, "--dump", str(REMAPPED_DUMP))
+
+    assert again.returncode == 1, again.stdout + again.stderr
+    assert "nothing to finalize" not in again.stdout
+    assert error in again.stderr
+    assert (
+        f"not finalized: {BINDING} has no {LIVE}.{PENDING}, but"
+        f" tools/validate_contracts.py exited 1 on {REMAPPED_DUMP}, so the"
+        f" live sync that it records is not confirmed; {BINDING} is unchanged"
+    ) in again.stderr
+    assert _snapshot(copy_root) == edited
+
+
+def test_the_committed_signers_file_is_strict():
   signers = (DASHBOARD / SIGNERS).read_bytes()
 
-  assert validator.bqca_capture_signers_error(signers) is None
-  if SSH_KEYGEN is None:
-    pytest.skip("ssh-keygen (OpenSSH) is not installed")
+  assert _load_validator().bqca_capture_signers_error(signers) is None
+
+
+@pytest.mark.usefixtures("signing_keys")
+def test_the_committed_signers_file_trusts_the_committed_receipt():
+  validator = _load_validator()
+  signers = (DASHBOARD / SIGNERS).read_bytes()
   data = (DASHBOARD / COMMITTED).read_bytes()
   signer = validator.parse_bqca_capture_receipt(data)["signer"]
+
   assert (
       validator.bqca_capture_signature_error(
           data, (DASHBOARD / f"{COMMITTED}.sig").read_bytes(), signer, signers
@@ -4185,8 +4312,9 @@ def test_finalize_next_steps_fit_any_later_sync():
   """The steps that finalize prints after a write name no one sync's notes.
 
   A later sync removes the notes that its own pending record listed, and
-  records its dated scorecard check; neither tool nor the implementation
-  guide keeps the wording of the sync that #559 tracked.
+  records its dated scorecard check; neither tool, the implementation
+  guide nor the dashboard tests keep the wording of the sync that #559
+  tracked.
   """
   steps = " ".join(_load_finalize(DASHBOARD).NEXT_STEPS.split())
 
@@ -4199,14 +4327,18 @@ def test_finalize_next_steps_fit_any_later_sync():
       " live_template_verification",
   ):
     assert fragment in steps
-  for relative in (
-      "tools/finalize_live_sync.py",
-      "tools/validate_contracts.py",
-      "docs/dashboard-implementation.md",
+  for path in (
+      DASHBOARD / "tools/finalize_live_sync.py",
+      DASHBOARD / "tools/validate_contracts.py",
+      DASHBOARD / "docs/dashboard-implementation.md",
+      ROOT / "tests/test_looker_studio_dashboard.py",
   ):
-    text = " ".join((DASHBOARD / relative).read_text(encoding="utf-8").split())
+    relative = path.relative_to(ROOT)
+    text = " ".join(path.read_text(encoding="utf-8").split())
     for phrase in (
         "keeps its legacy generic IDs",
+        "keeps its legacy generic column IDs",
+        "stays 2026-10-09 until then",
         "tracks that sync",
         "remove the #559 known-issue notes",
         "#bqca-column-id-note",

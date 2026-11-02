@@ -1845,6 +1845,27 @@ def _latest_calendar_date():
   )
 
 
+# What the post-sync scorecard check of 2026-11-01 found, by scorecard: the
+# value of its own field over the bound query on the canonical sentinel table
+# and on a hydrated table, which BigQuery and BatchedDataV2 on a fresh copy of
+# the live template gave alike.
+BQCA_POST_SYNC_SCORECARDS = {
+    "Total Tokens": ("39,146,504", "59,097,881"),
+    "Input Tokens": ("32,708,861", "57,677,125"),
+    "Output Tokens": ("6,437,643", "364,388"),
+    "Thinking Tokens": ("null (no values)", "1,047,032"),
+    "Cached Tokens": ("null (no values)", "1,147,570"),
+    "Active Data Agents": ("1", "3"),
+    "Total Turns": ("14,100", "2,041"),
+    "Completed Turns": ("14,093", "2,039"),
+    "Generated SQL Queries": ("0", "0"),
+    "LLM Responses": ("15,604", "2,876"),
+    "Avg LLM Call Latency (ms)": ("5,941.28", "7,429.72"),
+    "Avg Time to First Token (ms)": ("762.83", "7,429.71"),
+    "Suggested Columns Proposed": ("null (no values)", "null (no values)"),
+}
+
+
 def test_bqca_block_datasource_invariants_and_live_attestation_are_recorded():
   """The published data source's required settings and live proof are pinned.
 
@@ -1964,6 +1985,61 @@ def test_bqca_block_datasource_invariants_and_live_attestation_are_recorded():
       f"verified_date {verified} is not between published_date {published}"
       f" and today, {latest} (the later of the local and the UTC date)"
   )
+
+  # The post-sync scorecard check is recorded as it was run, not as a check to
+  # make: on a fresh copy that the Linking API created for each of two tables.
+  # The binding's comments give the token sums and the guide every value.
+  guide = (DASHBOARD / "docs/dashboard-implementation.md").read_text()
+  _, found, tail = guide.partition(
+      "##### Post-sync scorecard check (2026-11-01)\n"
+  )
+  assert found, "docs/dashboard-implementation.md has no scorecard check"
+  section = re.split(r"(?m)^#{1,6} ", tail, maxsplit=1)[0]
+  binding_text = (DASHBOARD / "bindings/bqca_report_template.yaml").read_text()
+  _, found, tail = binding_text.partition(
+      "# Post-sync scorecard check, 2026-11-01"
+  )
+  assert found, "bindings/bqca_report_template.yaml has no scorecard check"
+  comments = re.sub(
+      r"(?m)^#", "", tail.partition("\nlive_template_verification:")[0]
+  )
+  for path, text in (
+      ("docs/dashboard-implementation.md", section),
+      ("bindings/bqca_report_template.yaml", comments),
+  ):
+    text = " ".join(text.split())
+    for fragment in (
+        "CreateTempReport` with the Linking API",
+        "ds.ds0.refreshFields=false",
+        "BatchedDataV2` (`VIEW` mode) on each fresh copy",
+        "13,054 rows from 2026-07-31 to 2026-10-22",
+        "20200101",
+        "20261231",
+        "20250101",
+        "20261101",
+        "39,146,504",
+        "32,708,861",
+        "6,437,643",
+        "59,097,881",
+        "57,677,125",
+        "364,388",
+        "1,047,032",
+        "1,147,570",
+    ):
+      assert fragment in text, f"{path} does not record {fragment!r}"
+    assert "must show" not in text, f"{path} still says what a copy must show"
+  rows = [
+      [cell.strip() for cell in line.strip().strip("|").split("|")]
+      for line in section.splitlines()
+      if line.startswith("|")
+  ]
+  header, _, *body = rows
+  assert header[4:] == [
+      "Sentinel table (fresh copy BatchedDataV2 and BigQuery)",
+      "Hydrated table (fresh copy BatchedDataV2 and BigQuery)",
+  ]
+  assert len(body) == len(BQCA_POST_SYNC_SCORECARDS)
+  assert {row[1]: tuple(row[4:]) for row in body} == BQCA_POST_SYNC_SCORECARDS
 
   # The contract states the gate to pass after every publish, and points at
   # the evidence of the last run.
@@ -2320,12 +2396,11 @@ def _bqca_page_components(document):
 def test_bqca_column_ids_are_report_wide_unique_qt_identifiers():
   """All 65 BQCA column IDs are deterministic qt_ IDs, unique report-wide.
 
-  This pins the repository manifest and bundle. The live template keeps its
+  This pins the repository manifest and bundle. The live template kept its
   legacy generic column IDs (`met`, `dim`, `d0`, `m0`, ...), with which
-  components on one page of a copied report show each other's values, until
-  it is synced from these contracts; `verified_date` in
-  `bindings/bqca_report_template.yaml` stays 2026-10-09 until then, and
-  reports copied before the sync must be re-created after it.
+  components on one page of a copied report showed each other's values, until
+  the 2026-11-01 sync that `bindings/bqca_report_template.yaml` records;
+  reports copied before that sync must be re-created.
   """
   validator = _load_dashboard_module("validate_contracts")
   manifest = yaml.safe_load(

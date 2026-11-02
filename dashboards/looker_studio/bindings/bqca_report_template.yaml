@@ -91,13 +91,18 @@ block_datasource:
 # capture gives every scorecard its own `qt_` concept on its own field (all 65
 # concepts are distinct; Total, Input, Output, Thinking and Cached Tokens are
 # `qt_d779815a`, `qt_c90b69a4`, `qt_893d21f1`, `qt_a6d27140` and
-# `qt_31dd80a8`), the 1-click link's copy (`CreateTempReport` with the Linking
-# API) succeeded, and `BatchedDataV2` on the live template returned each page
-# 1-3 scorecard's own value, equal to BigQuery over the bound query on
-# canonical_sentinel_table for 20200101..20261231 (Total 39,146,504, Input
-# 32,708,861, Output 6,437,643, Thinking and Cached null). On
-# hydrated_bqca_table for 20250101..20261101, BigQuery gives Total 59,097,881,
-# Input 57,677,125, Output 364,388, Thinking 1,047,032 and Cached 1,147,570.
+# `qt_31dd80a8`). `CreateTempReport` with the Linking API, with the options of
+# the 1-click link (`ds.ds0.refreshFields=false`: the template's published
+# `BlockDatasource` schema and its `DS_START_DATE` and `DS_END_DATE`
+# parameters), created a fresh copy for canonical_sentinel_table and one for
+# hydrated_bqca_table (13,054 rows from 2026-07-31 to 2026-10-22), each with
+# all 65 distinct `qt_` concepts. `BatchedDataV2` (`VIEW` mode) on each fresh
+# copy returned each page 1-3 scorecard's own value, equal to BigQuery over the
+# bound query on the same table and dates: on canonical_sentinel_table for
+# 20200101..20261231 (the live template returned the same values), Total
+# 39,146,504, Input 32,708,861, Output 6,437,643, Thinking and Cached null; on
+# hydrated_bqca_table for 20250101..20261101, Total 59,097,881, Input
+# 57,677,125, Output 364,388, Thinking 1,047,032 and Cached 1,147,570.
 # "Post-sync scorecard check (2026-11-01)" in docs/dashboard-implementation.md
 # has every value.
 live_template_verification:

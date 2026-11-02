@@ -10,6 +10,8 @@ enforces the BQCA nine-event allowlist (zero tool or LLM_REQUEST events).
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import collections
 from collections.abc import Iterable
 import datetime
@@ -1876,6 +1878,25 @@ def parse_bqca_capture_receipt(data: bytes) -> dict[str, Any]:
   return receipt
 
 
+def _is_canonical_base64(value: str) -> bool:
+  """Return whether `value` is canonical base64, as ssh-keygen reads a key.
+
+  `_BASE64_RE` alone accepts `A`, `A=`, `AA`, `AAAAA` and `AB==`, but ssh-keygen
+  refuses them: it takes whole groups of four characters, padded with `=`, and
+  the bits after the last byte must be zero. So `value` must match
+  `_BASE64_RE`, be whole groups of four, decode strictly, and encode back to
+  itself: `AB==` decodes to the same byte as `AA==`, so only that last check
+  refuses it.
+  """
+  if not (_BASE64_RE.fullmatch(value) and len(value) % 4 == 0):
+    return False
+  try:
+    decoded = base64.b64decode(value, validate=True)
+  except (binascii.Error, ValueError):
+    return False
+  return base64.b64encode(decoded).decode("ascii") == value
+
+
 def bqca_capture_signers_error(signers: bytes) -> str | None:
   """Return why the signers file `signers` trusts no receipt, or None.
 
@@ -1891,11 +1912,12 @@ def bqca_capture_signers_error(signers: bytes) -> str | None:
 
   optionally followed by a key comment: one literal principal that
   BQCA_CAPTURE_SIGNER_RE matches (not quoted), that option and no other, one
-  of BQCA_CAPTURE_SIGNER_KEY_TYPES and a base64 key. A signer line holds only
-  printable ASCII and tabs, so its fields are the ones that ssh-keygen reads.
-  No principal is listed twice, in any letter case, and at least one is
-  listed. The file must be UTF-8 text; like ssh-keygen, this splits it into
-  lines at each line feed, and drops a carriage return that ends a line.
+  of BQCA_CAPTURE_SIGNER_KEY_TYPES and a canonical base64 key (see
+  `_is_canonical_base64`). A signer line holds only printable ASCII and tabs,
+  so its fields are the ones that ssh-keygen reads. No principal is listed
+  twice, in any letter case, and at least one is listed. The file must be
+  UTF-8 text; like ssh-keygen, this splits it into lines at each line feed,
+  and drops a carriage return that ends a line.
   """
   try:
     text = signers.decode("utf-8")
@@ -1931,7 +1953,7 @@ def bqca_capture_signers_error(signers: bytes) -> str | None:
           f"its key type {fields[2]!r} is not one of"
           f" {', '.join(BQCA_CAPTURE_SIGNER_KEY_TYPES)}"
       )
-    elif not _BASE64_RE.fullmatch(fields[3]):
+    elif not _is_canonical_base64(fields[3]):
       problem = "its public key is not base64"
     elif principal in listed:
       problem = (
