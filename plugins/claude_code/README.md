@@ -1,5 +1,8 @@
 # BigQuery Agent Analytics — Claude Code plugin
 
+> [!NOTE]
+> **Canonical Repository Notice**: Active development, releases, and marketplace distribution for Claude Code plugins have moved to the dedicated repository: [**`GoogleCloudPlatform/BigQuery-Agent-Analytics-Plugins`**](https://github.com/GoogleCloudPlatform/BigQuery-Agent-Analytics-Plugins). Please install and file issues there.
+
 Native Claude Code plugin that streams hook events to the BigQuery
 Agent Analytics `agent_events` table.
 

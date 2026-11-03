@@ -1,5 +1,8 @@
 # BigQuery Agent Analytics: Coding-Agent Mod
 
+> [!NOTE]
+> **Canonical Repository Notice**: Active development, releases, and marketplace distribution for Claude Code plugins and mods have moved to the dedicated repository: [**`GoogleCloudPlatform/BigQuery-Agent-Analytics-Plugins`**](https://github.com/GoogleCloudPlatform/BigQuery-Agent-Analytics-Plugins). Please install and file issues there.
+
 `bigquery-agent-analytics-mod` is an in-process [mod](https://code.claude.com/docs/en/plugins/mods/overview) for Claude Code that streams coding-agent sessions—prompts, model requests, tool calls, subagent runs, token usage, and latency—to BigQuery. The mod uses the [BigQuery Agent Analytics](https://adk.dev/integrations/bigquery-agent-analytics/) `agent_events` schema (including `event_id` for deduplication), so you can analyze coding-agent activity alongside ADK agents.
 
 The mod records events inside the CLI and sends them to BigQuery in batches in the background, so your session never waits on uploads, and if the mod itself fails your session carries on as normal. Start with [QUICKSTART.md](QUICKSTART.md) to connect your own project or join your team's setup.
@@ -11,11 +14,10 @@ The mod records events inside the CLI and sends them to BigQuery in batches in t
 - A BigQuery dataset in a Google Cloud project (see [The dataset](#the-dataset))
 - Google Cloud credentials (see [Authentication](#authentication))
 
-Install from this repository's `bqaa-tracing` marketplace:
+Install from the official `bqaa-tracing` marketplace:
 
 ```bash
-claude plugin marketplace add GoogleCloudPlatform/BigQuery-Agent-Analytics-SDK \
-  --sparse .claude-plugin plugins/claude_code_dist
+claude plugin marketplace add GoogleCloudPlatform/BigQuery-Agent-Analytics-Plugins
 claude plugin install bigquery-agent-analytics-mod@bqaa-tracing \
   --config project=my-gcp-project --config dataset=agent_analytics
 ```
